@@ -1,0 +1,91 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mujoco-truss-gen"
+version = "0.1.0"
+description = "Tools for generating MuJoCo models and Gym-style environments for isoperimetric truss robots."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mujoco>=3.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+keywords = [
+    "mujoco",
+    "robotics",
+    "truss",
+    "simulation",
+    "gymnasium",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    "mypy>=1.8",
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+test = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+mujoco-truss-gen = "generate_mujoco_model:main"
+
+[tool.setuptools]
+# TODO: Rename src/mujoco-truss-gen to src/mujoco_truss_gen once the public
+# import path is ready. For now, install the existing module as a top-level
+# scriptable module without moving user code around.
+package-dir = { "" = "src/mujoco-truss-gen" }
+py-modules = ["generate_mujoco_model"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = [
+    "--strict-config",
+    "--strict-markers",
+]
+pythonpath = ["src/mujoco-truss-gen"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "B",
+    "E",
+    "F",
+    "I",
+    "UP",
+    "W",
+]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = "src/mujoco-truss-gen"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
