@@ -68,6 +68,42 @@ dependencies:
 - `numpy`
 - `scipy`
 
+## Publishing Releases
+
+PyPI publishing is automated through the GitHub Actions workflow in
+`.github/workflows/publish.yml`. The workflow runs when a GitHub Release is
+published, and it can also be started manually from the GitHub Actions tab.
+
+The workflow:
+
+- Installs the package test dependencies.
+- Runs `python -m pytest`.
+- Builds the source distribution and wheel with `python -m build`.
+- Checks the built distributions with `python -m twine check dist/*`.
+- Publishes the distributions to PyPI.
+
+The publish job uses PyPI Trusted Publishing, so the repository does not need a
+long-lived PyPI API token in GitHub Secrets. PyPI must be configured to trust
+this GitHub Actions workflow before the first automated release. For the
+existing `mujoco-truss-gen` PyPI project, add a GitHub Actions trusted publisher
+with these settings:
+
+- PyPI project name: `mujoco-truss-gen`
+- GitHub repository owner: `isaa-sudweeks`
+- GitHub repository name: `mujoco-truss-gen`
+- Workflow filename: `publish.yml`
+- GitHub environment name: `pypi`
+
+To publish a new version:
+
+1. Update `version` in `pyproject.toml`.
+2. Commit and push the change.
+3. Create and publish a GitHub Release for that commit.
+4. Confirm the `Publish to PyPI` workflow passes.
+
+PyPI versions are immutable. If a release workflow fails after uploading a
+version, fix the issue, bump `version` again, and publish a new release.
+
 ## Quick Start
 
 Generate the built-in octahedron model:
