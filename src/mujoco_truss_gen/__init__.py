@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from mujoco_truss_gen.base_env import MujocoTrussEnv, TrussEnvConfig
 from mujoco_truss_gen.mujoco_model import (
+    PRESETS,
     build_triangle,
     build_world,
+    get_edge_index,
+    get_icosahedron_definition,
     get_mujoco_spec,
+    get_node_features,
     get_octahedron_definition,
     get_perimeter,
+    get_preset_definition,
     save_xml,
     view,
 )
@@ -19,12 +24,17 @@ __all__ = [
     "MujocoRelativeObsEnv",
     "MujocoTrussEnv",
     "MujocoVelocityCommandEnv",
+    "PRESETS",
     "TrussEnvConfig",
     "build_triangle",
     "build_world",
+    "get_edge_index",
+    "get_icosahedron_definition",
     "get_mujoco_spec",
+    "get_node_features",
     "get_octahedron_definition",
     "get_perimeter",
+    "get_preset_definition",
     "save_xml",
     "view",
 ]

@@ -5,10 +5,12 @@ from copy import deepcopy
 import numpy as np
 
 from mujoco_truss_gen import (
+    PRESETS,
     MujocoRelativeObsEnv,
     MujocoTrussEnv,
     MujocoVelocityCommandEnv,
     TrussEnvConfig,
+    get_icosahedron_definition,
     get_mujoco_spec,
 )
 
@@ -32,6 +34,24 @@ def test_generated_spec_runs_in_all_builtin_envs() -> None:
             assert "critical_eig" in info
         finally:
             env.close()
+
+
+def test_builtin_presets_compile() -> None:
+    assert {"octahedron", "icosahedron"} <= set(PRESETS)
+
+    for preset_name in PRESETS:
+        get_mujoco_spec(preset_name, realistic=False).compile()
+        get_mujoco_spec(preset_name, realistic=True).compile()
+
+
+def test_icosahedron_definition_shape() -> None:
+    node_dict, triangle_dict = get_icosahedron_definition()
+
+    assert len(node_dict) == 12
+    assert len(triangle_dict) == 20
+    for triangle_nodes in triangle_dict.values():
+        assert len(triangle_nodes) == 4
+        assert triangle_nodes[3] in triangle_nodes[:3]
 
 
 def test_env_accepts_xml_path(tmp_path) -> None:

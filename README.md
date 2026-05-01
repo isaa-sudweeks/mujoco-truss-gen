@@ -11,14 +11,14 @@ optimization projects.
 ## Project Status
 
 This repository is an internal lab prototype. It has a working installable
-package, a small public API, a built-in octahedron preset, and tests that verify
+package, a small public API, built-in polyhedron presets, and tests that verify
 basic model generation and environment stepping. The API may still change before
 the package is treated as stable research infrastructure.
 
 Current scope:
 
 - Generate MuJoCo `MjSpec` models for triangle-based truss structures.
-- Generate a built-in octahedron robot preset.
+- Generate built-in octahedron and icosahedron robot presets.
 - Build either an abstract per-node slide-joint model or a more realistic
   triangle-body model with connector balls for shared nodes.
 - Add tendon actuators and perimeter constraints.
@@ -28,15 +28,25 @@ Current scope:
 
 Known limitations:
 
-- Only the `"octahedron"` named preset is included.
-- Custom robot definitions are supported through dictionaries, but there is not
-  yet a registry of named robot presets.
+- The named preset registry is intentionally small: `"octahedron"` and
+  `"icosahedron"` are included.
+- Custom robot definitions are supported through dictionaries.
 - The default rewards are research defaults, not task-independent objectives.
 - The environment classes are starting points. Most RL, planning, or
   optimization tasks should subclass or wrap them for task-specific observations,
   rewards, resets, and termination logic.
 - The human viewer requires a Python environment where `mujoco.viewer` is
   available.
+- It is only possible to create custom trusses that are made up of independant
+  triangles. Right now it is not possible to create a truss structure that
+  includes triangles that share edges.
+
+
+Future Work:
+- Make it possible to specify tube routing rather than just isoperimetric triangles to allow for the simulation of single tube structure like the tetrahedron. 
+- Maybe it would be cool to make it possible to add rigid elements between sets of nodes to allow the simulation of structures like the Treg Rover. 
+- I think it would be cool to create some process which allows us to import any step file and it can automatically generate some feasable truss structure to approximate that shape.
+  
 
 ## Installation
 
@@ -75,6 +85,11 @@ PyPI publishing is automated through the GitHub Actions workflow in
 published, and it can also be started manually from the GitHub Actions tab.
 
 The workflow:
+For small test releases, you can use a pre-release tag (e.g., `0.1.0a1`).
+
+For bug fixes or backwards-compatible changes, you can use a patch release tag (e.g., `0.1.1`).
+
+For new features or breaking changes, you can use a minor or major release tag (e.g., `0.2.0` or `1.0.0`).
 
 - Installs the package test dependencies.
 - Runs `python -m pytest`.
@@ -103,6 +118,25 @@ To publish a new version:
 
 PyPI versions are immutable. If a release workflow fails after uploading a
 version, fix the issue, bump `version` again, and publish a new release.
+
+## Publishing Releases Manually
+
+Release checklist:
+
+1. Update `version` in `pyproject.toml`.
+2. Run `python -m pytest`.
+3. Run `python -m ruff check .`.
+4. Run `python -m ruff format --check .`.
+5. Build distributions with `python -m build`.
+6. Upload with `python -m twine upload dist/*`.
+7. Verify installation in a clean environment with
+   `python -m pip install mujoco-truss-gen`.
+
+Users update to the newest published package with:
+
+```bash
+python -m pip install --upgrade mujoco-truss-gen
+```
 
 ## Quick Start
 
@@ -147,7 +181,22 @@ obs, reward, terminated, truncated, info = env.step(action)
 env.close()
 ```
 
-Open the passive MuJoCo viewer:
+View a generated model programmatically using the passive viewer:
+
+```python
+from mujoco_truss_gen import get_mujoco_spec, view
+
+spec = get_mujoco_spec("octahedron", realistic=False)
+view(spec)
+```
+
+> [!NOTE]
+> On macOS, `mujoco.viewer.launch_passive` requires the script to be run with `mjpython` instead of the standard `python` executable:
+> ```bash
+> mjpython your_script.py
+> ```
+
+Alternatively, open the built-in octahedron model from the command line:
 
 ```bash
 python -m mujoco_truss_gen.generate_mujoco_model
@@ -192,6 +241,27 @@ model = spec.compile()
 read-only inputs. The realistic builder clones shared nodes internally, but it
 does not mutate the original `node_dict` or `triangle_dict` passed by the caller.
 
+## Graph Neural Network (GNN) Utilities
+
+You can extract node features and edge indices directly from a spec or model, formatted specifically for use with PyTorch Geometric (`torch_geometric.data.Data`):
+
+```python
+import torch
+from mujoco_truss_gen import get_mujoco_spec, get_edge_index, get_node_features
+
+spec = get_mujoco_spec("octahedron", realistic=False)
+
+# Get edge indices in PyG COO format: shape (2, num_directed_edges)
+edge_index = get_edge_index(spec)
+
+# Get node features (position and velocity): shape (num_nodes, 6)
+node_features = get_node_features(spec)
+
+# Convert to PyTorch tensors
+edge_index_tensor = torch.from_numpy(edge_index)
+x_tensor = torch.from_numpy(node_features)
+```
+
 ## Model Generation Contract
 
 Public generation helpers:
@@ -201,14 +271,18 @@ Public generation helpers:
 - `build_triangle(spec, node_dict, triangle_dict, realistic=False)` adds truss
   bodies, sites, tendons, actuators, and perimeter constraints to an existing
   spec.
-- `get_mujoco_spec("octahedron", realistic=False)` builds the built-in
-  octahedron preset.
+- `get_mujoco_spec("octahedron", realistic=False)` and
+  `get_mujoco_spec("icosahedron", realistic=False)` build built-in presets.
 - `get_mujoco_spec(node_dict, triangle_dict, realistic=False)` builds a custom
   dictionary-defined truss.
 - `get_octahedron_definition()` returns fresh node and triangle dictionaries for
   the built-in preset.
+- `get_icosahedron_definition()` returns fresh node and triangle dictionaries
+  for the built-in preset.
 - `get_perimeter(node_dict, triangle_dict)` computes each triangle perimeter
   from the first three vertices.
+- `get_edge_index(source)` extracts structural connectivity into a PyTorch Geometric compatible `(2, E)` numpy array.
+- `get_node_features(source)` extracts node positions and velocities into a PyTorch Geometric compatible `(N, 6)` numpy array.
 - `save_xml(spec, filename)` writes `spec.to_xml()` to disk and returns the
   resolved path.
 - `view(spec)` compiles and opens the generated model in MuJoCo's passive
@@ -337,33 +411,6 @@ Build a local distribution:
 python -m build
 ```
 
-## Publishing Releases
-
-PyPI releases are immutable for a given version. Every code change that should
-be published must use a new version number in `pyproject.toml`.
-
-For small test releases, you can use a pre-release tag (e.g., `0.1.0a1`).
-
-For bug fixes or backwards-compatible changes, you can use a patch release tag (e.g., `0.1.1`).
-
-For new features or breaking changes, you can use a minor or major release tag (e.g., `0.2.0` or `1.0.0`).
-
-Release checklist:
-
-1. Update `version` in `pyproject.toml`.
-2. Run `python -m pytest`.
-3. Run `python -m ruff check .`.
-4. Run `python -m ruff format --check .`.
-5. Build distributions with `python -m build`.
-6. Upload with `python -m twine upload dist/*`.
-7. Verify installation in a clean environment with
-   `python -m pip install mujoco-truss-gen`.
-
-Users update to the newest published package with:
-
-```bash
-python -m pip install --upgrade mujoco-truss-gen
-```
 
 ## Repository Layout
 

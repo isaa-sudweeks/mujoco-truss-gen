@@ -12,7 +12,7 @@ from mujoco_truss_gen.mujoco_model.bodies import (
 )
 from mujoco_truss_gen.mujoco_model.constraints import add_perimeter_constraint
 from mujoco_truss_gen.mujoco_model.model_types import EdgeTendonMap, NodeDict, TriangleDict
-from mujoco_truss_gen.mujoco_model.presets import get_octahedron_definition
+from mujoco_truss_gen.mujoco_model.presets import get_preset_definition
 from mujoco_truss_gen.mujoco_model.tendons import (
     add_actuator,
     add_edge_tendon,
@@ -191,9 +191,7 @@ def get_mujoco_spec(*args: Any, realistic: bool = False, **kwargs: Any) -> mujoc
     if len(args) == 2:
         node_dict, triangle_dict = args
     elif len(args) == 1 and isinstance(args[0], str):
-        if args[0] != "octahedron":
-            raise ValueError(f"Unknown structure type: {args[0]}")
-        node_dict, triangle_dict = get_octahedron_definition()
+        node_dict, triangle_dict = get_preset_definition(args[0])
     else:
         raise ValueError(
             "get_mujoco_spec() takes node_dict and triangle_dict, or one structure_type string."

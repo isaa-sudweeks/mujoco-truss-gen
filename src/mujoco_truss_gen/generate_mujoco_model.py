@@ -42,7 +42,12 @@ from mujoco_truss_gen.mujoco_model.model_types import (
     TriangleDict,
     Vector,
 )
-from mujoco_truss_gen.mujoco_model.presets import get_octahedron_definition
+from mujoco_truss_gen.mujoco_model.presets import (
+    PRESETS,
+    get_icosahedron_definition,
+    get_octahedron_definition,
+    get_preset_definition,
+)
 from mujoco_truss_gen.mujoco_model.tendons import (
     add_actuator,
     add_edge_tendon,
@@ -87,6 +92,7 @@ __all__ = [
     "NODE_MASS",
     "NODE_RADIUS",
     "NodeDict",
+    "PRESETS",
     "ROD_MASS",
     "ROD_RADIUS",
     "TENDON_RGBA",
@@ -108,9 +114,11 @@ __all__ = [
     "connect_triangeles",
     "create_node_bodies",
     "create_triangle_bodies",
+    "get_icosahedron_definition",
     "get_mujoco_spec",
     "get_octahedron_definition",
     "get_perimeter",
+    "get_preset_definition",
     "initialize_actuator_lengths",
     "main",
     "save_xml",

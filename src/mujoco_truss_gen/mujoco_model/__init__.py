@@ -12,21 +12,32 @@ from mujoco_truss_gen.mujoco_model.builders import (
     get_mujoco_spec,
 )
 from mujoco_truss_gen.mujoco_model.geometry import get_perimeter
+from mujoco_truss_gen.mujoco_model.gnn_utilities import get_edge_index, get_node_features
 from mujoco_truss_gen.mujoco_model.io_viewer import save_xml, view
 from mujoco_truss_gen.mujoco_model.model import MujocoModel
-from mujoco_truss_gen.mujoco_model.presets import get_octahedron_definition
+from mujoco_truss_gen.mujoco_model.presets import (
+    PRESETS,
+    get_icosahedron_definition,
+    get_octahedron_definition,
+    get_preset_definition,
+)
 
 __all__ = [
     "MujocoModel",
+    "PRESETS",
     "build_abstract_triangle",
     "build_realistic_triangle",
     "build_triangle",
     "build_world",
     "create_node_bodies",
     "create_triangle_bodies",
+    "get_edge_index",
+    "get_icosahedron_definition",
     "get_mujoco_spec",
+    "get_node_features",
     "get_octahedron_definition",
     "get_perimeter",
+    "get_preset_definition",
     "save_xml",
     "view",
 ]
