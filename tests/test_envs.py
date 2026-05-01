@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 import numpy as np
 
 from mujoco_truss_gen import (
@@ -45,3 +47,54 @@ def test_env_accepts_xml_path(tmp_path) -> None:
         assert truncated
     finally:
         env.close()
+
+
+def test_custom_dictionary_spec_compiles_and_runs() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+    }
+
+    spec = get_mujoco_spec(node_dict, triangle_dict, realistic=False)
+    env = MujocoTrussEnv(TrussEnvConfig(spec, max_steps=2, nsubsteps=1, speed=0.01))
+    try:
+        obs, _ = env.reset(seed=11)
+        assert env.observation_space.contains(obs)
+
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        obs, reward, terminated, truncated, info = env.step(action)
+
+        assert env.observation_space.contains(obs)
+        assert isinstance(reward, float)
+        assert isinstance(terminated, bool)
+        assert not truncated
+        assert "critical_eig" in info
+    finally:
+        env.close()
+
+
+def test_generation_does_not_mutate_custom_dictionaries() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+        "node_4": [0.4, -0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+        "triangle_2": ["node_1", "node_4", "node_2", "node_1"],
+    }
+    original_nodes = deepcopy(node_dict)
+    original_triangles = deepcopy(triangle_dict)
+
+    get_mujoco_spec(node_dict, triangle_dict, realistic=False).compile()
+    assert node_dict == original_nodes
+    assert triangle_dict == original_triangles
+
+    get_mujoco_spec(node_dict, triangle_dict, realistic=True).compile()
+    assert node_dict == original_nodes
+    assert triangle_dict == original_triangles

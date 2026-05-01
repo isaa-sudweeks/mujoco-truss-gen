@@ -1,127 +1,98 @@
 # mujoco-truss-gen
 
-A Python library for generating MuJoCo/Gymnasium environments for arbitrary configurations of isoperimetric robots.
+`mujoco-truss-gen` is a Python package for generating MuJoCo models and
+Gymnasium-style environments for triangle-based isoperimetric truss robots.
 
-The main implemented code builds MuJoCo model specifications for triangle-based truss structures, including an octahedron example, and provides Gymnasium-compatible environment wrappers around generated specs.
+The package is intended for members of the isoperimetric robot research workflow
+who need a shared, installable source of MuJoCo robot models instead of copying
+model-generation code between reinforcement learning, planning, simulation, and
+optimization projects.
 
 ## Project Status
 
-TBD: Add the current development status, research goals, and any known limitations.
+This repository is an internal lab prototype. It has a working installable
+package, a small public API, a built-in octahedron preset, and tests that verify
+basic model generation and environment stepping. The API may still change before
+the package is treated as stable research infrastructure.
 
-Known today:
+Current scope:
 
-- Source code lives under `src/mujoco_truss_gen/`.
-- `pyproject.toml` defines packaging metadata and the console script entry point.
-- MuJoCo model generation code lives under `src/mujoco_truss_gen/mujoco_model/`.
-- `src/generate_mujoco_model.py` remains as a temporary compatibility shim.
-- The generator and environments use Gymnasium, MuJoCo, NumPy, and SciPy.
-
-## Features
-
-Implemented or partially implemented:
-
-- Build a MuJoCo `MjSpec` world with a plane and top light.
-- Define node and triangle dictionaries for truss structures.
-- Generate an octahedron truss definition.
-- Build abstract triangle-based truss models.
-- Build a more realistic triangle model with cloned shared nodes and connector balls.
-- Add tendons, tendon actuators, and perimeter constraints.
-- Compute triangle perimeters.
+- Generate MuJoCo `MjSpec` models for triangle-based truss structures.
+- Generate a built-in octahedron robot preset.
+- Build either an abstract per-node slide-joint model or a more realistic
+  triangle-body model with connector balls for shared nodes.
+- Add tendon actuators and perimeter constraints.
 - Save generated MuJoCo XML.
-- Launch the MuJoCo passive viewer for inspection.
-- Wrap generated specs in Gymnasium environments.
-- Provide relative-position and velocity-command environment variants.
+- Wrap generated models in Gymnasium-compatible environments.
+- Provide base, relative-observation, and velocity-command environment variants.
 
-Planned / TBD:
+Known limitations:
 
-- More tests and validation examples.
-- Documentation for custom robot definitions.
-- Examples for training or controlling generated environments.
+- Only the `"octahedron"` named preset is included.
+- Custom robot definitions are supported through dictionaries, but there is not
+  yet a registry of named robot presets.
+- The default rewards are research defaults, not task-independent objectives.
+- The environment classes are starting points. Most RL, planning, or
+  optimization tasks should subclass or wrap them for task-specific observations,
+  rewards, resets, and termination logic.
+- The human viewer requires a Python environment where `mujoco.viewer` is
+  available.
 
-## Repository Layout
+## Installation
 
-```text
-mujoco-truss-gen/
-├── README.md
-├── pyproject.toml
-└── src/
-    ├── generate_mujoco_model.py
-    └── mujoco_truss_gen/
-        ├── __init__.py
-        ├── base_env.py
-        ├── generate_mujoco_model.py
-        ├── relative_observation_env.py
-        ├── velocity_command_env.py
-        └── mujoco_model/
-            ├── __init__.py
-            ├── bodies.py
-            ├── builders.py
-            ├── constants.py
-            ├── constraints.py
-            ├── geometry.py
-            ├── io_viewer.py
-            ├── model.py
-            ├── model_types.py
-            ├── presets.py
-            └── tendons.py
+After a release has been published to PyPI:
+
+```bash
+python -m pip install mujoco-truss-gen
 ```
 
-## Requirements
+To upgrade to the newest published version:
 
-The package imports:
+```bash
+python -m pip install --upgrade mujoco-truss-gen
+```
 
-- Python 3.10+ expected, based on current type-hint syntax.
+For local development from a clone:
+
+```bash
+git clone https://github.com/isaa-sudweeks/mujoco-truss-gen.git
+cd mujoco-truss-gen
+python -m pip install -e ".[dev]"
+```
+
+The package requires Python 3.10 or newer and installs these runtime
+dependencies:
+
 - `gymnasium`
 - `mujoco`
 - `numpy`
 - `scipy`
 
-## Installation
-
-For local development, install the package in editable mode:
-
-```bash
-pip install -e .
-```
-
 ## Quick Start
 
-The current script can build and view the built-in octahedron example when run directly:
-
-```bash
-PYTHONPATH=src mjpython -m mujoco_truss_gen.generate_mujoco_model
-```
-
-The current high-level API is available from `mujoco_truss_gen`:
-
-```python
-from mujoco_truss_gen import build_triangle, build_world, get_octahedron_definition
-
-node_dict, triangle_dict = get_octahedron_definition()
-spec = build_world()
-build_triangle(spec, node_dict, triangle_dict, realistic=False)
-```
-
-To create a complete MuJoCo spec for the built-in structure:
+Generate the built-in octahedron model:
 
 ```python
 from mujoco_truss_gen import get_mujoco_spec
 
 spec = get_mujoco_spec("octahedron", realistic=False)
+model = spec.compile()
 ```
 
-To save XML:
+Save the generated XML:
 
 ```python
-from mujoco_truss_gen import save_xml
+from mujoco_truss_gen import get_mujoco_spec, save_xml
 
-save_xml(spec, "model.xml")
+spec = get_mujoco_spec("octahedron", realistic=False)
+xml_path = save_xml(spec, "octahedron.xml")
 ```
 
-To run the generated model as a Gymnasium environment:
+Run one Gymnasium step:
 
 ```python
 import numpy as np
+
 from mujoco_truss_gen import MujocoRelativeObsEnv, TrussEnvConfig, get_mujoco_spec
 
 spec = get_mujoco_spec("octahedron", realistic=False)
@@ -140,93 +111,253 @@ obs, reward, terminated, truncated, info = env.step(action)
 env.close()
 ```
 
-The environment constructors accept a generated `mujoco.MjSpec`, a compiled `mujoco.MjModel`, an XML string, or a path to an XML file.
+Open the passive MuJoCo viewer:
 
-## Defining a Truss
+```bash
+python -m mujoco_truss_gen.generate_mujoco_model
+```
 
-Trusses are currently represented with two dictionaries:
+## Defining a Custom Truss
 
-- `node_dict`: maps node names to 3D positions.
-- `triangle_dict`: maps triangle names to a list of four node names.
+Custom trusses are represented with two dictionaries.
 
-The first three names in each triangle define the triangle vertices. The fourth name marks the passive node for perimeter constraints.
-
-Example from the built-in octahedron:
+`node_dict` maps node names to 3D positions:
 
 ```python
 node_dict = {
-    "node_1": [0.0, 0.0, 0.1],
-    "node_2": [1.0, 0.0, 0.1],
-    "node_3": [0.5, 0.8660, 0.1],
+    "node_1": [0.0, 0.0, 0.2],
+    "node_2": [0.8, 0.0, 0.2],
+    "node_3": [0.4, 0.7, 0.2],
 }
+```
 
+`triangle_dict` maps triangle names to four node names:
+
+```python
 triangle_dict = {
     "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
 }
 ```
 
-TBD: Add a complete custom robot example and explain the passive-node convention in more detail.
+The first three names are the triangle vertices. The fourth name is the passive
+node for that triangle's perimeter constraint and must be one of the first three
+vertex names.
 
-## Main API Surface
+Build a model from those dictionaries:
 
-Current public helpers exported from `mujoco_truss_gen` include:
+```python
+from mujoco_truss_gen import get_mujoco_spec
 
-- `TrussEnvConfig`: shared configuration for the provided environments.
-- `MujocoModel`: compiled MuJoCo model wrapper with truss metadata and query helpers.
-- `MujocoTrussEnv`: base Gymnasium environment with absolute tendon and center-of-mass observations.
-- `MujocoRelativeObsEnv`: Gymnasium environment with COM-relative node positions and actuator delta actions.
-- `MujocoVelocityCommandEnv`: relative-observation environment with direct actuator velocity commands.
-- `build_world()`: create the base MuJoCo world.
-- `build_triangle(spec, node_dict, triangle_dict, realistic=False)`: add truss bodies, tendons, actuators, and constraints.
-- `get_octahedron_definition()`: return the built-in octahedron node and triangle dictionaries.
-- `get_mujoco_spec(...)`: build a complete spec from dictionaries or the `"octahedron"` preset.
-- `get_perimeter(node_dict, triangle_dict)`: compute perimeters for each triangle.
-- `save_xml(spec, filename)`: write the generated MuJoCo XML to disk.
-- `view(spec)`: compile and inspect the model in the MuJoCo passive viewer.
+spec = get_mujoco_spec(node_dict, triangle_dict, realistic=False)
+model = spec.compile()
+```
 
-The environment classes are intended as starting points. For custom tasks, subclass `MujocoTrussEnv` or one of its variants and override `_get_obs()`, `_compute_reward()`, or `step()` as needed.
+`get_mujoco_spec()` and `build_triangle()` treat caller-provided dictionaries as
+read-only inputs. The realistic builder clones shared nodes internally, but it
+does not mutate the original `node_dict` or `triangle_dict` passed by the caller.
 
-## Environment Design Notes
+## Model Generation Contract
 
-The generator/environment split is the intended boundary:
+Public generation helpers:
 
-- Use `get_mujoco_spec(...)`, `build_world()`, and `build_triangle(...)` to produce the robot model.
-- Pass the resulting spec, compiled model, XML string, or XML path into an environment.
-- Use `TrussEnvConfig` for shared training knobs such as episode length, substeps, action speed, reward weights, and optional control noise.
-- Subclass the environment layer for task-specific observations, actions, rewards, and termination conditions.
+- `build_world()` creates a base `mujoco.MjSpec` containing a ground plane and
+  top light.
+- `build_triangle(spec, node_dict, triangle_dict, realistic=False)` adds truss
+  bodies, sites, tendons, actuators, and perimeter constraints to an existing
+  spec.
+- `get_mujoco_spec("octahedron", realistic=False)` builds the built-in
+  octahedron preset.
+- `get_mujoco_spec(node_dict, triangle_dict, realistic=False)` builds a custom
+  dictionary-defined truss.
+- `get_octahedron_definition()` returns fresh node and triangle dictionaries for
+  the built-in preset.
+- `get_perimeter(node_dict, triangle_dict)` computes each triangle perimeter
+  from the first three vertices.
+- `save_xml(spec, filename)` writes `spec.to_xml()` to disk and returns the
+  resolved path.
+- `view(spec)` compiles and opens the generated model in MuJoCo's passive
+  viewer.
 
-Important assumptions:
+Input expectations:
 
-- Generated bodies representing truss nodes should keep names beginning with `node_`.
-- Generated structural tendons and sites should come from this package's builder helpers if you want rigidity and slip helper methods to work automatically.
-- `MujocoRelativeObsEnv` uses normalized delta actions; `MujocoVelocityCommandEnv` sends direct actuator controls.
-- The base reward is a research default, not a universal objective. Most training runs should tune or override `_compute_reward()`.
+- Node names should be unique strings. Names beginning with `node_` are required
+  for the built-in metadata and environment helpers.
+- Node positions must be 3D numeric sequences.
+- Triangle entries must contain exactly the three vertex nodes plus one passive
+  node.
+- The passive node must appear in that triangle's first three vertices.
+- The builder helpers should be used when environment rigidity and slip helpers
+  are needed, because those helpers infer structure from generated body, site,
+  tendon, and actuator names.
+
+Model modes:
+
+- `realistic=False` creates one world-body per node with slide joints on `x`,
+  `y`, and `z`. This is the simpler abstract model and is useful for fast
+  algorithm development.
+- `realistic=True` creates triangle bodies, clones shared triangle nodes inside
+  the generated model, and connects shared vertices through connector balls.
+  This is intended to better represent the triangle-module structure.
+
+## Environment Contract
+
+The environment constructors accept any of these model sources:
+
+- `mujoco.MjSpec`
+- `mujoco.MjModel`
+- XML string
+- path to an XML file
+- `TrussEnvConfig`
+
+Available environments:
+
+- `MujocoTrussEnv`: base environment with tendon lengths, tendon velocities,
+  center-of-mass position, and center-of-mass velocity in the observation.
+- `MujocoRelativeObsEnv`: relative node-position observations and normalized
+  actuator delta actions.
+- `MujocoVelocityCommandEnv`: relative observations with direct velocity command
+  actions.
+
+Shared configuration is provided by `TrussEnvConfig`:
+
+```python
+from mujoco_truss_gen import TrussEnvConfig
+
+config = TrussEnvConfig(
+    model_source=spec,
+    max_steps=10_000,
+    nsubsteps=1,
+    speed=0.01,
+    forward_weight=5.0,
+    energy_weight=0.005,
+    alive_bonus=0.1,
+    rigidity_weight=0.5,
+    slip_weight=0.1,
+    critical_eig_threshold=0.03,
+    slip_height=0.2,
+    control_noise_std=0.0,
+    control_noise_relative=True,
+    runtime_apply_control_noise=False,
+)
+```
+
+Step/reset behavior:
+
+- `reset(seed=...)` follows the Gymnasium API and returns `(obs, info)`.
+- `step(action)` returns `(obs, reward, terminated, truncated, info)`.
+- `truncated` becomes true when `max_steps` is reached.
+- `terminated` becomes true when the normalized rigidity metric falls below
+  `critical_eig_threshold`.
+- `info` includes reward components and `critical_eig`.
+
+Action behavior:
+
+- `MujocoTrussEnv` sends clipped actuator controls directly in the MuJoCo
+  actuator control range.
+- `MujocoRelativeObsEnv` expects actions in `[-1, 1]`; each action component
+  changes the previous control by `action * config.speed`.
+- `MujocoVelocityCommandEnv` expects actions in `[-config.speed, config.speed]`
+  and sends those values directly.
+
+Reward behavior:
+
+- The default reward combines forward velocity, alive bonus, energy penalty,
+  rigidity reward, and slip penalty.
+- These defaults are provided for experimentation, not as a canonical objective
+  for every isoperimetric robot task.
+- Custom tasks should subclass an environment and override `_get_obs()`,
+  `_compute_reward()`, `reset()`, or `step()` as needed.
+
+Rendering:
+
+- `render_mode="rgb_array"` returns a rendered NumPy RGB image.
+- `render_mode="human"` opens a passive MuJoCo viewer when the local MuJoCo
+  viewer module is available.
 
 ## Development
 
-TBD: Add development setup, formatting, linting, testing, and contribution instructions.
+Set up a development environment:
 
-Suggested sections to fill in later:
+```bash
+python -m pip install -e ".[dev]"
+```
 
-- Environment setup
-- Running tests
-- Generating example XML
-- Running a viewer demo
-- Adding a new robot preset
-- Release process
+Run tests:
 
-## Roadmap
+```bash
+python -m pytest
+```
 
-TBD: Replace this checklist with current research and engineering priorities.
+Run linting and formatting checks:
 
-- Add automated tests for geometry generation and MuJoCo spec creation.
-- Add examples for abstract and realistic model generation.
-- Document actuator, tendon, and constraint assumptions.
+```bash
+python -m ruff check .
+python -m ruff format --check .
+```
+
+Build a local distribution:
+
+```bash
+python -m build
+```
+
+## Publishing Releases
+
+PyPI releases are immutable for a given version. Every code change that should
+be published must use a new version number in `pyproject.toml`.
+
+Release checklist:
+
+1. Update `version` in `pyproject.toml`.
+2. Run `python -m pytest`.
+3. Run `python -m ruff check .`.
+4. Run `python -m ruff format --check .`.
+5. Build distributions with `python -m build`.
+6. Upload with `python -m twine upload dist/*`.
+7. Verify installation in a clean environment with
+   `python -m pip install mujoco-truss-gen`.
+
+Users update to the newest published package with:
+
+```bash
+python -m pip install --upgrade mujoco-truss-gen
+```
+
+## Repository Layout
+
+```text
+mujoco-truss-gen/
+├── LICENSE
+├── README.md
+├── pyproject.toml
+├── tests/
+│   └── test_envs.py
+└── src/
+    ├── generate_mujoco_model.py
+    └── mujoco_truss_gen/
+        ├── __init__.py
+        ├── base_env.py
+        ├── generate_mujoco_model.py
+        ├── relative_observation_env.py
+        ├── velocity_command_env.py
+        └── mujoco_model/
+            ├── bodies.py
+            ├── builders.py
+            ├── constants.py
+            ├── constraints.py
+            ├── geometry.py
+            ├── io_viewer.py
+            ├── model.py
+            ├── model_types.py
+            ├── presets.py
+            └── tendons.py
+```
 
 ## Citation
 
-TBD: Add citation information if this repository supports a paper, thesis, or research artifact.
+There is no formal citation for this package yet.
 
 ## License
 
-TBD: Add license information.
+This project is distributed under the BSD-3-Clause license. See `LICENSE` for
+the full license text.

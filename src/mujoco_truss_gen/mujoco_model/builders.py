@@ -32,7 +32,9 @@ def clone_shared_nodes(
     The input dictionaries are mutated in place. The returned original-node mapping
     and instance map are used when realistic connector balls are enabled.
     """
-    original_node_dict = {name: np.array(position, dtype=float) for name, position in node_dict.items()}
+    original_node_dict = {
+        name: np.array(position, dtype=float) for name, position in node_dict.items()
+    }
     positions = np.array(list(original_node_dict.values()))
     center = np.mean(positions, axis=0)
     scale = 1.0 + clone_offset
@@ -144,8 +146,14 @@ def build_triangle(
     *,
     realistic: bool = False,
 ) -> None:
+    node_dict = _copy_node_dict(node_dict)
+    triangle_dict = _copy_triangle_dict(triangle_dict)
+
     if realistic:
-        original_node_dict, node_instances, center, scale = clone_shared_nodes(node_dict, triangle_dict)
+        original_node_dict, node_instances, center, scale = clone_shared_nodes(
+            node_dict,
+            triangle_dict,
+        )
         create_triangle_bodies(
             spec,
             original_node_dict,
@@ -162,6 +170,14 @@ def build_triangle(
         return
 
     build_realistic_triangle(spec, triangle_dict)
+
+
+def _copy_node_dict(node_dict: NodeDict) -> NodeDict:
+    return {name: list(position) for name, position in node_dict.items()}
+
+
+def _copy_triangle_dict(triangle_dict: TriangleDict) -> TriangleDict:
+    return {name: list(nodes) for name, nodes in triangle_dict.items()}
 
 
 def get_mujoco_spec(*args: Any, realistic: bool = False, **kwargs: Any) -> mujoco.MjSpec:
