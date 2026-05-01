@@ -9,6 +9,7 @@ description = "Tools for generating MuJoCo models and Gym-style environments for
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "gymnasium>=0.29",
     "mujoco>=3.0",
     "numpy>=1.24",
     "scipy>=1.10",
