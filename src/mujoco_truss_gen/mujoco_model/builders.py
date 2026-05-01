@@ -59,8 +59,10 @@ def clone_shared_nodes(
             node_instances[node].append(instance_name)
 
             original_position = original_node_dict[node]
-            new_position = center + scale * (triangle_centroid - center) + (
-                original_position - triangle_centroid
+            new_position = (
+                center
+                + scale * (triangle_centroid - center)
+                + (original_position - triangle_centroid)
             )
             new_node_dict[instance_name] = new_position.tolist()
             min_z = min(min_z, float(new_position[2]))

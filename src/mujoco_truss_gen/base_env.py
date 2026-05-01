@@ -195,11 +195,7 @@ class MujocoTrussEnv(gym.Env):
         rigidity_reward = self.config.rigidity_weight * critical_eig
         slip_reward = -self.config.slip_weight * slip_penalty
         total_reward = (
-            forward_reward
-            + self.config.alive_bonus
-            + energy_reward
-            + rigidity_reward
-            + slip_reward
+            forward_reward + self.config.alive_bonus + energy_reward + rigidity_reward + slip_reward
         )
         info = {
             "forward": forward_reward,
