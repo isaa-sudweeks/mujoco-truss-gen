@@ -49,7 +49,9 @@ def add_actuator(spec: mujoco.MjSpec, tendon_name: str, kp: float, dampratio: fl
     actuator.set_to_intvelocity(kp=kp, dampratio=dampratio)
 
 
-def add_realistic_actuator(spec: mujoco.MjSpec, tendon_name: str, kp: float, dampratio: float) -> None:
+def add_realistic_actuator(
+    spec: mujoco.MjSpec, tendon_name: str, kp: float, dampratio: float
+) -> None:
     actuator = spec.add_actuator(
         name=f"act_{tendon_name}",
         trntype=mujoco.mjtTrn.mjTRN_TENDON,

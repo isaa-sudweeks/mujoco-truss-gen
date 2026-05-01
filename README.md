@@ -306,6 +306,12 @@ python -m build
 PyPI releases are immutable for a given version. Every code change that should
 be published must use a new version number in `pyproject.toml`.
 
+For small test releases, you can use a pre-release tag (e.g., `0.1.0a1`).
+
+For bug fixes or backwards-compatible changes, you can use a patch release tag (e.g., `0.1.1`).
+
+For new features or breaking changes, you can use a minor or major release tag (e.g., `0.2.0` or `1.0.0`).
+
 Release checklist:
 
 1. Update `version` in `pyproject.toml`.

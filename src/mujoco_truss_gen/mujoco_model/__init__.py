@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from mujoco_truss_gen.mujoco_model.bodies import build_world, create_node_bodies, create_triangle_bodies
+from mujoco_truss_gen.mujoco_model.bodies import (
+    build_world,
+    create_node_bodies,
+    create_triangle_bodies,
+)
 from mujoco_truss_gen.mujoco_model.builders import (
     build_abstract_triangle,
     build_realistic_triangle,

@@ -19,10 +19,6 @@ from mujoco_truss_gen.mujoco_model.builders import (
     clone_shared_nodes,
     get_mujoco_spec,
 )
-from mujoco_truss_gen.mujoco_model.constraints import (
-    add_orientation_constraints,
-    add_perimeter_constraint,
-)
 from mujoco_truss_gen.mujoco_model.constants import (
     CONNECTOR_MASS,
     CONNECTOR_RADIUS,
@@ -32,6 +28,10 @@ from mujoco_truss_gen.mujoco_model.constants import (
     ROD_RADIUS,
     TENDON_RGBA,
     TRUSS_RGBA,
+)
+from mujoco_truss_gen.mujoco_model.constraints import (
+    add_orientation_constraints,
+    add_perimeter_constraint,
 )
 from mujoco_truss_gen.mujoco_model.geometry import as_mujoco_quat, get_perimeter, triangle_frame
 from mujoco_truss_gen.mujoco_model.io_viewer import save_xml, view

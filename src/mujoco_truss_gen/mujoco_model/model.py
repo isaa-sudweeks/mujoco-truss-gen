@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import mujoco
 import numpy as np
 
 from mujoco_truss_gen.mujoco_model.tendons import initialize_actuator_lengths
-
 
 ModelSource = mujoco.MjSpec | mujoco.MjModel | str | Path
 
@@ -233,10 +231,14 @@ class MujocoModel:
         }
 
     def get_node_position_matrix(self) -> np.ndarray:
-        return np.array([self.data.xpos[self.node_body_ids[node_name]] for node_name in self.node_names])
+        return np.array(
+            [self.data.xpos[self.node_body_ids[node_name]] for node_name in self.node_names]
+        )
 
     def get_node_linear_velocity_matrix(self) -> np.ndarray:
-        return np.array([self.data.cvel[self.node_body_ids[node_name]][3:] for node_name in self.node_names])
+        return np.array(
+            [self.data.cvel[self.node_body_ids[node_name]][3:] for node_name in self.node_names]
+        )
 
     def _rigidity_matrix(self) -> np.ndarray:
         dims = len(self.active_axes)

@@ -30,7 +30,9 @@ def disable_geom_contacts(geom: Any) -> None:
     geom.conaffinity = 1
 
 
-def add_planar_node_body(parent_body: Any, node_name: str, local_position: Vector, index: int) -> Any:
+def add_planar_node_body(
+    parent_body: Any, node_name: str, local_position: Vector, index: int
+) -> Any:
     node_body = parent_body.add_body(name=node_name, pos=local_position)
     node_body.add_site(name=node_name)
     node_geom = node_body.add_geom(
@@ -206,7 +208,9 @@ def create_triangle_bodies(
         positions = [np.array(node_dict[node_name], dtype=float) for node_name in node_names]
         rotation_matrix, quaternion, local_positions = triangle_frame(*positions)
 
-        triangle_body = spec.worldbody.add_body(name=f"tri_{triangle_name}", pos=positions[0].tolist())
+        triangle_body = spec.worldbody.add_body(
+            name=f"tri_{triangle_name}", pos=positions[0].tolist()
+        )
         triangle_body.quat = quaternion
         triangle_body.add_freejoint()
 
