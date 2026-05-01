@@ -42,13 +42,14 @@ test = [
 ]
 
 [project.scripts]
-mujoco-truss-gen = "generate_mujoco_model:main"
+mujoco-truss-gen = "mujoco_truss_gen.generate_mujoco_model:main"
 
 [tool.setuptools]
-# TODO: Rename src/mujoco-truss-gen to src/mujoco_truss_gen once the public
-# import path is ready. For now, install the existing module as a top-level
-# scriptable module without moving user code around.
-package-dir = { "" = "src/mujoco-truss-gen" }
+package-dir = { "" = "src" }
+packages = [
+    "mujoco_truss_gen",
+    "mujoco_truss_gen.mujoco_model",
+]
 py-modules = ["generate_mujoco_model"]
 
 [tool.pytest.ini_options]
@@ -57,7 +58,7 @@ addopts = [
     "--strict-config",
     "--strict-markers",
 ]
-pythonpath = ["src/mujoco-truss-gen"]
+pythonpath = ["src"]
 testpaths = ["tests"]
 
 [tool.ruff]
@@ -83,7 +84,7 @@ line-ending = "auto"
 
 [tool.mypy]
 python_version = "3.10"
-mypy_path = "src/mujoco-truss-gen"
+mypy_path = "src"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false

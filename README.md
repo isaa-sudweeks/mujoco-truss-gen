@@ -10,9 +10,10 @@ TBD: Add the current development status, research goals, and any known limitatio
 
 Known today:
 
-- Source code lives under `src/mujoco-truss-gen/`.
-- `pyproject.toml` exists but has not been populated yet.
-- The current generator script is `src/mujoco-truss-gen/generate_mujoco_model.py`.
+- Source code lives under `src/mujoco_truss_gen/`.
+- `pyproject.toml` defines packaging metadata and the console script entry point.
+- MuJoCo model generation code lives under `src/mujoco_truss_gen/mujoco_model/`.
+- `src/generate_mujoco_model.py` remains as a temporary compatibility shim.
 - The generator uses MuJoCo, NumPy, and SciPy.
 
 ## Features
@@ -44,9 +45,21 @@ mujoco-truss-gen/
 ├── README.md
 ├── pyproject.toml
 └── src/
-    └── mujoco-truss-gen/
+    ├── generate_mujoco_model.py
+    └── mujoco_truss_gen/
         ├── __init__.py
-        └── generate_mujoco_model.py
+        ├── generate_mujoco_model.py
+        └── mujoco_model/
+            ├── __init__.py
+            ├── bodies.py
+            ├── builders.py
+            ├── constants.py
+            ├── constraints.py
+            ├── geometry.py
+            ├── io_viewer.py
+            ├── model_types.py
+            ├── presets.py
+            └── tendons.py
 ```
 
 ## Requirements
@@ -72,17 +85,17 @@ pip install -e .
 
 ## Quick Start
 
-TBD: Confirm the final import path once the package layout is finalized.
-
 The current script can build and view the built-in octahedron example when run directly:
 
 ```bash
-python src/mujoco-truss-gen/generate_mujoco_model.py
+PYTHONPATH=src mjpython -m mujoco_truss_gen.generate_mujoco_model
 ```
 
-The current high-level API in `generate_mujoco_model.py` is:
+The current high-level API is available from `mujoco_truss_gen`:
 
 ```python
+from mujoco_truss_gen import build_triangle, build_world, get_octahedron_definition
+
 node_dict, triangle_dict = get_octahedron_definition()
 spec = build_world()
 build_triangle(spec, node_dict, triangle_dict, realistic=False)
@@ -91,12 +104,16 @@ build_triangle(spec, node_dict, triangle_dict, realistic=False)
 To create a complete MuJoCo spec for the built-in structure:
 
 ```python
+from mujoco_truss_gen import get_mujoco_spec
+
 spec = get_mujoco_spec("octahedron", realistic=False)
 ```
 
 To save XML:
 
 ```python
+from mujoco_truss_gen import save_xml
+
 save_xml(spec, "model.xml")
 ```
 
@@ -127,7 +144,7 @@ TBD: Add a complete custom robot example and explain the passive-node convention
 
 ## Main API Surface
 
-Current public helpers in `generate_mujoco_model.py` include:
+Current public helpers exported from `mujoco_truss_gen` include:
 
 - `build_world()`: create the base MuJoCo world.
 - `build_triangle(spec, node_dict, triangle_dict, realistic=False)`: add truss bodies, tendons, actuators, and constraints.

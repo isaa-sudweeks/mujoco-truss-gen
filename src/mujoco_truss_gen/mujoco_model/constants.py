@@ -1,0 +1,10 @@
+from __future__ import annotations
+
+NODE_RADIUS = 0.1
+NODE_MASS = 0.1
+CONNECTOR_RADIUS = 0.05
+CONNECTOR_MASS = 0.05
+ROD_RADIUS = 0.025
+ROD_MASS = 0.05
+TRUSS_RGBA = [0.9, 0.9, 0.9, 1.0]
+TENDON_RGBA = [0.0, 0.1804, 0.3647, 1.0]
