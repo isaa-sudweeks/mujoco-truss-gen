@@ -3,6 +3,8 @@ from __future__ import annotations
 from mujoco_truss_gen.base_env import MujocoTrussEnv, TrussEnvConfig
 from mujoco_truss_gen.mujoco_model import (
     PRESETS,
+    build_abstract_shapes,
+    build_shapes,
     build_triangle,
     build_world,
     get_edge_index,
@@ -12,6 +14,7 @@ from mujoco_truss_gen.mujoco_model import (
     get_octahedron_definition,
     get_perimeter,
     get_preset_definition,
+    get_route_lengths,
     save_xml,
     view,
 )
@@ -26,6 +29,8 @@ __all__ = [
     "MujocoVelocityCommandEnv",
     "PRESETS",
     "TrussEnvConfig",
+    "build_abstract_shapes",
+    "build_shapes",
     "build_triangle",
     "build_world",
     "get_edge_index",
@@ -35,6 +40,7 @@ __all__ = [
     "get_octahedron_definition",
     "get_perimeter",
     "get_preset_definition",
+    "get_route_lengths",
     "save_xml",
     "view",
 ]

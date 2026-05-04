@@ -13,8 +13,10 @@ from mujoco_truss_gen.mujoco_model.bodies import (
     find_original_node,
 )
 from mujoco_truss_gen.mujoco_model.builders import (
+    build_abstract_shapes,
     build_abstract_triangle,
     build_realistic_triangle,
+    build_shapes,
     build_triangle,
     clone_shared_nodes,
     get_mujoco_spec,
@@ -32,13 +34,21 @@ from mujoco_truss_gen.mujoco_model.constants import (
 from mujoco_truss_gen.mujoco_model.constraints import (
     add_orientation_constraints,
     add_perimeter_constraint,
+    add_route_length_constraints,
 )
-from mujoco_truss_gen.mujoco_model.geometry import as_mujoco_quat, get_perimeter, triangle_frame
+from mujoco_truss_gen.mujoco_model.geometry import (
+    as_mujoco_quat,
+    get_perimeter,
+    get_route_lengths,
+    triangle_frame,
+)
 from mujoco_truss_gen.mujoco_model.io_viewer import save_xml, view
 from mujoco_truss_gen.mujoco_model.model_types import (
     EdgeKey,
     EdgeTendonMap,
     NodeDict,
+    ShapeDefinition,
+    ShapeDict,
     TriangleDict,
     Vector,
 )
@@ -49,12 +59,15 @@ from mujoco_truss_gen.mujoco_model.presets import (
     get_preset_definition,
 )
 from mujoco_truss_gen.mujoco_model.tendons import (
+    actuator_name_for_tendon,
     add_actuator,
     add_edge_tendon,
     add_realistic_actuator,
+    add_route_tendon,
     add_tendon,
     edge_key,
     initialize_actuator_lengths,
+    unique_actuator_name,
 )
 
 
@@ -95,6 +108,8 @@ __all__ = [
     "PRESETS",
     "ROD_MASS",
     "ROD_RADIUS",
+    "ShapeDefinition",
+    "ShapeDict",
     "TENDON_RGBA",
     "TRUSS_RGBA",
     "TriangleDict",
@@ -105,9 +120,14 @@ __all__ = [
     "add_perimeter_constraint",
     "add_perimeter_constrait",
     "add_realistic_actuator",
+    "add_route_length_constraints",
+    "add_route_tendon",
     "add_tendon",
+    "actuator_name_for_tendon",
+    "build_abstract_shapes",
     "build_abstract_triangle",
     "build_realistic_triangle",
+    "build_shapes",
     "build_triangle",
     "build_world",
     "clone_shared_nodes",
@@ -119,9 +139,11 @@ __all__ = [
     "get_octahedron_definition",
     "get_perimeter",
     "get_preset_definition",
+    "get_route_lengths",
     "initialize_actuator_lengths",
     "main",
     "save_xml",
+    "unique_actuator_name",
     "view",
 ]
 

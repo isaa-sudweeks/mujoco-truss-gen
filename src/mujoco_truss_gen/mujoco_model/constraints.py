@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import mujoco
 
-from mujoco_truss_gen.mujoco_model.model_types import EdgeTendonMap, NodeDict, TriangleDict
+from mujoco_truss_gen.mujoco_model.model_types import (
+    EdgeTendonMap,
+    NodeDict,
+    ShapeDict,
+    TriangleDict,
+)
 from mujoco_truss_gen.mujoco_model.tendons import edge_key
 
 
@@ -55,5 +60,22 @@ def add_perimeter_constraint(
         constraint.name1 = passive_edge_tendon
         constraint.name2 = tendon_name
         constraint.data[:5] = [0.0, -1.0, 0.0, 0.0, 0.0]
+        constraint.solref = [0.02, 1.0]
+        constraint.solimp[:3] = [0.9, 0.95, 0.001]
+
+
+def add_route_length_constraints(
+    spec: mujoco.MjSpec,
+    shape_dict: ShapeDict,
+    route_tendons: dict[str, str],
+) -> None:
+    for shape_name in shape_dict:
+        tendon_name = route_tendons[shape_name]
+        constraint = spec.add_equality(
+            name=f"Route_Length_Constraint_{shape_name}",
+            type=mujoco.mjtEq.mjEQ_TENDON,
+        )
+        constraint.name1 = tendon_name
+        constraint.data[:5] = [0.0, 0.0, 0.0, 0.0, 0.0]
         constraint.solref = [0.02, 1.0]
         constraint.solimp[:3] = [0.9, 0.95, 0.001]

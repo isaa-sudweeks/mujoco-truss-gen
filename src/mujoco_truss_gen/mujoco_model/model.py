@@ -174,6 +174,20 @@ class MujocoModel:
             node_pair = tuple(self.site_to_node.get(site_name) for site_name in sites)
             if None not in node_pair and node_pair[0] != node_pair[1]:
                 structural_edges.append((node_pair[0], node_pair[1]))
+        structural_edge_keys = {tuple(sorted(edge)) for edge in structural_edges}
+
+        for tendon_name, sites in sorted(tendon_defs.items()):
+            if not tendon_name.startswith("tendon_") or len(sites) != 2:
+                continue
+            node_pair = tuple(self.site_to_node.get(site_name) for site_name in sites)
+            if None in node_pair or node_pair[0] == node_pair[1]:
+                continue
+            key = tuple(sorted(node_pair))
+            if key in structural_edge_keys:
+                continue
+            structural_edges.append((node_pair[0], node_pair[1]))
+            structural_edge_keys.add(key)
+
         return structural_edges
 
     def _structural_edges_from_model_names(self) -> list[tuple[str, str]]:

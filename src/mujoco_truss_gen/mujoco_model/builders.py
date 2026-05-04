@@ -10,13 +10,22 @@ from mujoco_truss_gen.mujoco_model.bodies import (
     create_node_bodies,
     create_triangle_bodies,
 )
-from mujoco_truss_gen.mujoco_model.constraints import add_perimeter_constraint
-from mujoco_truss_gen.mujoco_model.model_types import EdgeTendonMap, NodeDict, TriangleDict
+from mujoco_truss_gen.mujoco_model.constraints import (
+    add_perimeter_constraint,
+    add_route_length_constraints,
+)
+from mujoco_truss_gen.mujoco_model.model_types import (
+    EdgeTendonMap,
+    NodeDict,
+    ShapeDict,
+    TriangleDict,
+)
 from mujoco_truss_gen.mujoco_model.presets import get_preset_definition
 from mujoco_truss_gen.mujoco_model.tendons import (
     add_actuator,
     add_edge_tendon,
     add_realistic_actuator,
+    add_route_tendon,
     add_tendon,
     edge_key,
 )
@@ -91,6 +100,7 @@ def clone_shared_nodes(
 
 
 def build_abstract_triangle(spec: mujoco.MjSpec, triangle_dict: TriangleDict) -> None:
+    actuator_names: set[str] = set()
     for triangle_nodes in triangle_dict.values():
         nodes = triangle_nodes[:3]
         passive_node = triangle_nodes[3]
@@ -107,6 +117,7 @@ def build_abstract_triangle(spec: mujoco.MjSpec, triangle_dict: TriangleDict) ->
                     tendon_name=f"tendon_{from_node}_{to_node}",
                     kp=5000.0,
                     dampratio=1.0,
+                    used_names=actuator_names,
                 )
 
     add_perimeter_constraint(spec, triangle_dict)
@@ -115,6 +126,7 @@ def build_abstract_triangle(spec: mujoco.MjSpec, triangle_dict: TriangleDict) ->
 def build_realistic_triangle(spec: mujoco.MjSpec, triangle_dict: TriangleDict) -> None:
     edge_tendons: EdgeTendonMap = {}
     actuated_tendons: set[str] = set()
+    actuator_names: set[str] = set()
 
     for triangle_nodes in triangle_dict.values():
         nodes = triangle_nodes[:3]
@@ -135,10 +147,53 @@ def build_realistic_triangle(spec: mujoco.MjSpec, triangle_dict: TriangleDict) -
                     tendon_name=tendon_name,
                     kp=1000.0,
                     dampratio=1.0,
+                    used_names=actuator_names,
                 )
                 actuated_tendons.add(tendon_name)
 
     add_perimeter_constraint(spec, triangle_dict, edge_tendons)
+
+
+def build_abstract_shapes(
+    spec: mujoco.MjSpec,
+    node_dict: NodeDict,
+    shape_dict: ShapeDict,
+) -> None:
+    shape_dict = _copy_shape_dict(shape_dict)
+    _validate_shape_dict(node_dict, shape_dict)
+
+    create_node_bodies(spec, node_dict)
+
+    edge_tendons: EdgeTendonMap = {}
+    route_tendons = {}
+    actuated_tendons: set[str] = set()
+    actuator_names: set[str] = set()
+
+    for shape_name, shape in shape_dict.items():
+        route = shape["route"]
+        for from_node, to_node in zip(route, route[1:], strict=False):
+            add_edge_tendon(spec, edge_tendons, from_node, to_node)
+
+        for from_node, to_node in shape["active_edges"]:
+            tendon_name = edge_tendons[edge_key(from_node, to_node)]
+            if tendon_name in actuated_tendons:
+                continue
+            add_actuator(
+                spec,
+                tendon_name=tendon_name,
+                kp=5000.0,
+                dampratio=1.0,
+                used_names=actuator_names,
+            )
+            actuated_tendons.add(tendon_name)
+
+        route_tendons[shape_name] = add_route_tendon(spec, shape_name, route)
+
+    add_route_length_constraints(
+        spec,
+        shape_dict,
+        route_tendons,
+    )
 
 
 def build_triangle(
@@ -174,12 +229,91 @@ def build_triangle(
     build_realistic_triangle(spec, triangle_dict)
 
 
+def build_shapes(
+    spec: mujoco.MjSpec,
+    node_dict: NodeDict,
+    shape_dict: ShapeDict,
+    *,
+    realistic: bool = False,
+) -> None:
+    if realistic:
+        raise NotImplementedError(
+            "Routed shape dictionaries are only supported with realistic=False."
+        )
+
+    node_dict = _copy_node_dict(node_dict)
+    build_abstract_shapes(spec, node_dict, shape_dict)
+
+
 def _copy_node_dict(node_dict: NodeDict) -> NodeDict:
     return {name: list(position) for name, position in node_dict.items()}
 
 
 def _copy_triangle_dict(triangle_dict: TriangleDict) -> TriangleDict:
     return {name: list(nodes) for name, nodes in triangle_dict.items()}
+
+
+def _copy_shape_dict(shape_dict: ShapeDict) -> ShapeDict:
+    copied = {}
+    for name, shape in shape_dict.items():
+        copied[name] = {
+            key: [list(edge) if isinstance(edge, list | tuple) else edge for edge in value]
+            if isinstance(value, list)
+            else value
+            for key, value in shape.items()
+        }
+    return copied
+
+
+def _validate_shape_dict(node_dict: NodeDict, shape_dict: ShapeDict) -> None:
+    for shape_name, shape in shape_dict.items():
+        if "route" not in shape:
+            raise ValueError(f"Shape '{shape_name}' is missing required 'route'.")
+        if "active_edges" not in shape:
+            raise ValueError(f"Shape '{shape_name}' is missing required 'active_edges'.")
+
+        route = shape["route"]
+        active_edges = shape["active_edges"]
+        if not isinstance(route, list) or len(route) < 2:
+            raise ValueError(f"Shape '{shape_name}' route must contain at least two node names.")
+        if not isinstance(active_edges, list):
+            raise ValueError(f"Shape '{shape_name}' active_edges must be a list of node pairs.")
+
+        missing_nodes = [node for node in route if node not in node_dict]
+        if missing_nodes:
+            missing = ", ".join(missing_nodes)
+            raise ValueError(f"Shape '{shape_name}' route references unknown node(s): {missing}.")
+
+        route_edges = {
+            edge_key(from_node, to_node)
+            for from_node, to_node in zip(route, route[1:], strict=False)
+        }
+        normalized_active_edges = []
+        for edge in active_edges:
+            if not isinstance(edge, list | tuple) or len(edge) != 2:
+                raise ValueError(
+                    f"Shape '{shape_name}' active edge {edge!r} must contain two node names."
+                )
+            from_node, to_node = edge
+            if from_node not in node_dict or to_node not in node_dict:
+                raise ValueError(
+                    f"Shape '{shape_name}' active edge {edge!r} references an unknown node."
+                )
+            key = edge_key(from_node, to_node)
+            if key not in route_edges:
+                raise ValueError(
+                    f"Shape '{shape_name}' active edge {edge!r} is not adjacent in the route."
+                )
+            normalized_active_edges.append([from_node, to_node])
+
+        shape["active_edges"] = normalized_active_edges
+
+
+def _looks_like_shape_dict(candidate: Any) -> bool:
+    return bool(candidate) and all(
+        isinstance(value, dict) and ("route" in value or "active_edges" in value)
+        for value in candidate.values()
+    )
 
 
 def get_mujoco_spec(*args: Any, realistic: bool = False, **kwargs: Any) -> mujoco.MjSpec:
@@ -189,13 +323,17 @@ def get_mujoco_spec(*args: Any, realistic: bool = False, **kwargs: Any) -> mujoc
 
     spec = build_world()
     if len(args) == 2:
-        node_dict, triangle_dict = args
+        node_dict, structure_dict = args
     elif len(args) == 1 and isinstance(args[0], str):
-        node_dict, triangle_dict = get_preset_definition(args[0])
+        node_dict, structure_dict = get_preset_definition(args[0])
     else:
         raise ValueError(
-            "get_mujoco_spec() takes node_dict and triangle_dict, or one structure_type string."
+            "get_mujoco_spec() takes node_dict and triangle_dict, node_dict and shape_dict, "
+            "or one structure_type string."
         )
 
-    build_triangle(spec, node_dict, triangle_dict, realistic=realistic)
+    if isinstance(structure_dict, dict) and _looks_like_shape_dict(structure_dict):
+        build_shapes(spec, node_dict, structure_dict, realistic=realistic)
+    else:
+        build_triangle(spec, node_dict, structure_dict, realistic=realistic)
     return spec

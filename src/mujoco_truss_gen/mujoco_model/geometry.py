@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-from mujoco_truss_gen.mujoco_model.model_types import NodeDict, TriangleDict, Vector
+from mujoco_truss_gen.mujoco_model.model_types import NodeDict, ShapeDict, TriangleDict, Vector
 
 
 def as_mujoco_quat(rotation_matrix: np.ndarray) -> list[float]:
@@ -52,3 +52,19 @@ def get_perimeter(node_dict: NodeDict, triangle_dict: TriangleDict) -> dict[str,
             sum(np.linalg.norm(positions[(index + 1) % 3] - positions[index]) for index in range(3))
         )
     return perimeters
+
+
+def get_route_lengths(node_dict: NodeDict, shape_dict: ShapeDict) -> dict[str, float]:
+    route_lengths = {}
+    for name, shape in shape_dict.items():
+        route = shape["route"]
+        route_lengths[name] = float(
+            sum(
+                np.linalg.norm(
+                    np.array(node_dict[to_node], dtype=float)
+                    - np.array(node_dict[from_node], dtype=float)
+                )
+                for from_node, to_node in zip(route, route[1:], strict=False)
+            )
+        )
+    return route_lengths

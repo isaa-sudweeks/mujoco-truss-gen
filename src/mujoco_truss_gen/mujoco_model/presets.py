@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from mujoco_truss_gen.mujoco_model.model_types import NodeDict, TriangleDict
+import numpy as np
+
+from mujoco_truss_gen.mujoco_model.model_types import NodeDict, ShapeDict, TriangleDict
 
 
 def get_octahedron_definition() -> tuple[NodeDict, TriangleDict]:
@@ -68,7 +70,8 @@ def get_icosahedron_definition() -> tuple[NodeDict, TriangleDict]:
         f"node_{index}": [scale * x, scale * y, scale * z + z_offset]
         for index, (x, y, z) in enumerate(vertices, start=1)
     }
-    # TODO: I don't really think this is following all the constraints that we need. In fact I am not really sure if this shape is even possible.
+    # TODO: I don't really think this is following all the constraints that we need.
+    # In fact I am not really sure if this shape is even possible.
     triangle_dict = {
         "triangle_1": ["node_8", "node_9", "node_2", "node_2"],
         "triangle_2": ["node_7", "node_9", "node_4", "node_4"],
@@ -109,14 +112,42 @@ def get_solar_array_definition() -> tuple[NodeDict, TriangleDict]:
     return node_dict, triangle_dict
 
 
-PRESETS: dict[str, Callable[[], tuple[NodeDict, TriangleDict]]] = {
+def get_tetrahedron_definition() -> tuple[NodeDict, ShapeDict]:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.1],
+        "node_2": [1.0, 0.0, 0.1],
+        "node_3": [0.5, 0.8660, 0.1],
+        "node_4": [0.5, np.sqrt(3) / 6, 0.1 + np.sqrt(2 / 3)],
+    }
+    shape_dict = {
+        "path_1": {
+            "route": ["node_1", "node_2", "node_4", "node_3"],
+            "active_edges": [
+                ["node_1", "node_2"],
+                ["node_4", "node_3"],
+            ],
+        },
+        "path_2": {
+            "route": ["node_2", "node_3", "node_1", "node_4"],
+            "active_edges": [
+                ["node_2", "node_3"],
+                ["node_1", "node_4"],
+            ],
+        },
+    }
+
+    return node_dict, shape_dict
+
+
+PRESETS: dict[str, Callable[[], tuple[NodeDict, TriangleDict | ShapeDict]]] = {
     "octahedron": get_octahedron_definition,
     "icosahedron": get_icosahedron_definition,
     "solar_array": get_solar_array_definition,
+    "tetrahedron": get_tetrahedron_definition,
 }
 
 
-def get_preset_definition(structure_type: str) -> tuple[NodeDict, TriangleDict]:
+def get_preset_definition(structure_type: str) -> tuple[NodeDict, TriangleDict | ShapeDict]:
     try:
         preset = PRESETS[structure_type]
     except KeyError as exc:

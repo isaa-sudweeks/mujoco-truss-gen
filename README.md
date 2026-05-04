@@ -43,7 +43,7 @@ Known limitations:
 
 
 Future Work:
-- Make it possible to specify tube routing rather than just isoperimetric triangles to allow for the simulation of single tube structure like the tetrahedron. 
+- Make it so for any continuous tube structure we can generate a valid MuJoCo model without having to manually define all of the active edges. This seems like it can be achomplished by simply alternating between active and inactive edges as we traverse the tube. 
 - Maybe it would be cool to make it possible to add rigid elements between sets of nodes to allow the simulation of structures like the Treg Rover. 
 - I think it would be cool to create some process which allows us to import any step file and it can automatically generate some feasable truss structure to approximate that shape.
   
@@ -237,6 +237,43 @@ spec = get_mujoco_spec(node_dict, triangle_dict, realistic=False)
 model = spec.compile()
 ```
 
+Continuous tube shapes can also be represented with a shape dictionary. Each
+shape defines a routed path and the route edges that should be actuated:
+
+```python
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.1],
+        "node_2": [1.0, 0.0, 0.1],
+        "node_3": [0.5, 0.8660, 0.1],
+        "node_4": [0.5, np.sqrt(3) / 6, 0.1 + np.sqrt(2 / 3)],
+    }
+    shape_dict = {
+        "path_1": {
+            "route": ["node_1", "node_2", "node_4", "node_3"],
+            "active_edges": [
+                ["node_1", "node_2"],
+                ["node_4", "node_3"],
+            ],
+        },
+        "path_2": {
+            "route": ["node_2", "node_3", "node_1", "node_4"],
+            "active_edges": [
+                ["node_2", "node_3"],
+                ["node_1", "node_4"],
+            ],
+        },
+    }
+
+spec = get_mujoco_spec(node_dict, shape_dict, realistic=False)
+model = spec.compile()
+```
+
+The route creates one edge tendon for each adjacent node pair in the path.
+Active edges receive actuators. A route-length equality constraint keeps the
+total routed length constant, so non-actuated passive edges absorb length
+changes caused by the active edges. Routed shape dictionaries currently support
+`realistic=False`.
+
 `get_mujoco_spec()` and `build_triangle()` treat caller-provided dictionaries as
 read-only inputs. The realistic builder clones shared nodes internally, but it
 does not mutate the original `node_dict` or `triangle_dict` passed by the caller.
@@ -271,10 +308,14 @@ Public generation helpers:
 - `build_triangle(spec, node_dict, triangle_dict, realistic=False)` adds truss
   bodies, sites, tendons, actuators, and perimeter constraints to an existing
   spec.
+- `build_shapes(spec, node_dict, shape_dict, realistic=False)` adds routed
+  continuous-tube shapes with per-edge tendons and route-length constraints.
 - `get_mujoco_spec("octahedron", realistic=False)` and
   `get_mujoco_spec("icosahedron", realistic=False)` build built-in presets.
 - `get_mujoco_spec(node_dict, triangle_dict, realistic=False)` builds a custom
   dictionary-defined truss.
+- `get_mujoco_spec(node_dict, shape_dict, realistic=False)` builds a routed
+  continuous-tube shape model.
 - `get_octahedron_definition()` returns fresh node and triangle dictionaries for
   the built-in preset.
 - `get_icosahedron_definition()` returns fresh node and triangle dictionaries
@@ -296,6 +337,9 @@ Input expectations:
 - Triangle entries must contain exactly the three vertex nodes plus one passive
   node.
 - The passive node must appear in that triangle's first three vertices.
+- Shape entries must contain `route` and `active_edges` keys.
+- Shape routes must contain at least two node names. Each active edge must be an
+  adjacent pair in the route.
 - The builder helpers should be used when environment rigidity and slip helpers
   are needed, because those helpers infer structure from generated body, site,
   tendon, and actuator names.
