@@ -28,8 +28,8 @@ Current scope:
 
 Known limitations:
 
-- The named preset registry is intentionally small: `"octahedron"` and
-  `"icosahedron"` are included.
+- The named preset registry is intentionally small. Current presets are
+  `"octahedron"`, `"icosahedron"`, `"solar_array"`, and `"tetrahedron"`.
 - Custom robot definitions are supported through dictionaries.
 - The default rewards are research defaults, not task-independent objectives.
 - The environment classes are starting points. Most RL, planning, or
@@ -37,16 +37,18 @@ Known limitations:
   rewards, resets, and termination logic.
 - The human viewer requires a Python environment where `mujoco.viewer` is
   available.
-- It is only possible to create custom trusses that are made up of independant
+- It is only possible to create custom trusses that are made up of independent
   triangles. Right now it is not possible to create a truss structure that
   includes triangles that share edges.
 
 
-Future Work:
-- Make it so for any continuous tube structure we can generate a valid MuJoCo model without having to manually define all of the active edges. This seems like it can be achomplished by simply alternating between active and inactive edges as we traverse the tube. 
-- Maybe it would be cool to make it possible to add rigid elements between sets of nodes to allow the simulation of structures like the Treg Rover. 
-- I think it would be cool to create some process which allows us to import any step file and it can automatically generate some feasable truss structure to approximate that shape.
-  
+Future work:
+
+- Generate a valid MuJoCo model for a continuous tube structure without manually
+  defining every active edge.
+- Add rigid elements between sets of nodes to support structures such as the
+  Treg Rover.
+- Explore importing a STEP file and generating a feasible truss approximation.
 
 ## Installation
 
@@ -67,8 +69,13 @@ For local development from a clone:
 ```bash
 git clone https://github.com/isaa-sudweeks/mujoco-truss-gen.git
 cd mujoco-truss-gen
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
+
+On systems where `python` is not available, use `python3` for the commands in
+this README.
 
 The package requires Python 3.10 or newer and installs these runtime
 dependencies:
@@ -158,6 +165,10 @@ spec = get_mujoco_spec("octahedron", realistic=False)
 xml_path = save_xml(spec, "octahedron.xml")
 ```
 
+Relative output paths are resolved from the current working directory. The
+example above writes `octahedron.xml` into the directory where the script is
+run.
+
 Run one Gymnasium step:
 
 ```python
@@ -200,6 +211,12 @@ Alternatively, open the built-in octahedron model from the command line:
 
 ```bash
 python -m mujoco_truss_gen.generate_mujoco_model
+```
+
+You can also start from the included custom-truss example:
+
+```bash
+python examples/custom_truss.py
 ```
 
 ## Defining a Custom Truss
@@ -310,8 +327,8 @@ Public generation helpers:
   spec.
 - `build_shapes(spec, node_dict, shape_dict, realistic=False)` adds routed
   continuous-tube shapes with per-edge tendons and route-length constraints.
-- `get_mujoco_spec("octahedron", realistic=False)` and
-  `get_mujoco_spec("icosahedron", realistic=False)` build built-in presets.
+- `get_mujoco_spec("octahedron", realistic=False)` and the other names in
+  `PRESETS` build built-in presets.
 - `get_mujoco_spec(node_dict, triangle_dict, realistic=False)` builds a custom
   dictionary-defined truss.
 - `get_mujoco_spec(node_dict, shape_dict, realistic=False)` builds a routed
@@ -337,6 +354,9 @@ Input expectations:
 - Triangle entries must contain exactly the three vertex nodes plus one passive
   node.
 - The passive node must appear in that triangle's first three vertices.
+- Custom triangle definitions are validated before MuJoCo objects are created,
+  and validation errors name the node, triangle, or shape entry that needs to be
+  fixed.
 - Shape entries must contain `route` and `active_edges` keys.
 - Shape routes must contain at least two node names. Each active edge must be an
   adjacent pair in the route.
@@ -462,6 +482,8 @@ python -m build
 mujoco-truss-gen/
 ├── LICENSE
 ├── README.md
+├── examples/
+│   └── custom_truss.py
 ├── pyproject.toml
 ├── tests/
 │   └── test_envs.py

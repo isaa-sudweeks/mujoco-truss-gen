@@ -70,13 +70,6 @@ def get_icosahedron_definition() -> tuple[NodeDict, TriangleDict]:
         f"node_{index}": [scale * x, scale * y, scale * z + z_offset]
         for index, (x, y, z) in enumerate(vertices, start=1)
     }
-    # TODO: I don't really think this is following all the constraints that we need.
-    # In fact I am not really sure if this shape is even possible.
-    triangle_dict = {
-        "triangle_1": ["node_8", "node_9", "node_2", "node_2"],
-        "triangle_2": ["node_7", "node_9", "node_4", "node_4"],
-        "triangle_3": ["node_7", "node_8", "node_11", "node_11"],
-    }
     triangle_dict = {
         f"triangle_{index}": [
             *(f"node_{vertex_index + 1}" for vertex_index in face),

@@ -4,13 +4,21 @@ import time
 from pathlib import Path
 
 import mujoco
-import mujoco.viewer
 
 from mujoco_truss_gen.mujoco_model.tendons import initialize_actuator_lengths
 
 
 def view(spec: mujoco.MjSpec) -> None:
     """Compile and view the MuJoCo spec."""
+    try:
+        import mujoco.viewer as mujoco_viewer
+    except ImportError as exc:
+        raise RuntimeError(
+            "MuJoCo passive viewer is unavailable in this Python environment. "
+            "Install a MuJoCo build that includes the viewer module, and on macOS "
+            "run viewer scripts with mjpython."
+        ) from exc
+
     model = spec.compile()
     if hasattr(model, "model") and hasattr(model, "data"):
         mj_model = model.model
@@ -24,7 +32,7 @@ def view(spec: mujoco.MjSpec) -> None:
         )
 
     initialize_actuator_lengths(mj_model, data)
-    with mujoco.viewer.launch_passive(mj_model, data) as viewer:
+    with mujoco_viewer.launch_passive(mj_model, data) as viewer:
         viewer.sync()
         while viewer.is_running():
             if data.time == 0.0:
@@ -37,6 +45,7 @@ def view(spec: mujoco.MjSpec) -> None:
 def save_xml(spec: mujoco.MjSpec, filename: str | Path) -> Path:
     path = Path(filename)
     if not path.is_absolute():
-        path = Path(__file__).resolve().parents[1] / path
+        path = Path.cwd() / path
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(spec.to_xml(), encoding="utf-8")
     return path

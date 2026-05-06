@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import mujoco
 import numpy as np
+import pytest
 
 from mujoco_truss_gen import (
     PRESETS,
@@ -15,6 +16,7 @@ from mujoco_truss_gen import (
     get_icosahedron_definition,
     get_mujoco_spec,
     get_route_lengths,
+    save_xml,
 )
 
 
@@ -74,6 +76,17 @@ def test_env_accepts_xml_path(tmp_path) -> None:
         env.close()
 
 
+def test_save_xml_relative_path_uses_current_working_directory(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    spec = get_mujoco_spec("octahedron", realistic=False)
+
+    xml_path = save_xml(spec, "generated/octahedron.xml")
+
+    assert xml_path == tmp_path / "generated" / "octahedron.xml"
+    assert xml_path.exists()
+    assert xml_path.read_text(encoding="utf-8").lstrip().startswith("<mujoco")
+
+
 def test_custom_dictionary_spec_compiles_and_runs() -> None:
     node_dict = {
         "node_1": [0.0, 0.0, 0.2],
@@ -100,6 +113,49 @@ def test_custom_dictionary_spec_compiles_and_runs() -> None:
         assert "critical_eig" in info
     finally:
         env.close()
+
+
+def test_custom_triangle_validation_reports_unknown_nodes() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_missing", "node_1"],
+    }
+
+    with pytest.raises(ValueError, match="Triangle 'triangle_1' references unknown node"):
+        get_mujoco_spec(node_dict, triangle_dict)
+
+
+def test_custom_triangle_validation_reports_bad_passive_node() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+        "node_4": [0.4, -0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_4"],
+    }
+
+    with pytest.raises(ValueError, match="passive node 'node_4' must be one"):
+        get_mujoco_spec(node_dict, triangle_dict)
+
+
+def test_custom_node_validation_reports_bad_position() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+    }
+
+    with pytest.raises(ValueError, match="Node 'node_1' position"):
+        get_mujoco_spec(node_dict, triangle_dict)
 
 
 def test_generation_does_not_mutate_custom_dictionaries() -> None:

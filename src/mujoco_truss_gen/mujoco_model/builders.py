@@ -203,6 +203,8 @@ def build_triangle(
     *,
     realistic: bool = False,
 ) -> None:
+    _validate_node_dict(node_dict)
+    _validate_triangle_dict(node_dict, triangle_dict)
     node_dict = _copy_node_dict(node_dict)
     triangle_dict = _copy_triangle_dict(triangle_dict)
 
@@ -241,6 +243,7 @@ def build_shapes(
             "Routed shape dictionaries are only supported with realistic=False."
         )
 
+    _validate_node_dict(node_dict)
     node_dict = _copy_node_dict(node_dict)
     build_abstract_shapes(spec, node_dict, shape_dict)
 
@@ -254,19 +257,79 @@ def _copy_triangle_dict(triangle_dict: TriangleDict) -> TriangleDict:
 
 
 def _copy_shape_dict(shape_dict: ShapeDict) -> ShapeDict:
-    copied = {}
+    copied: dict[str, Any] = {}
     for name, shape in shape_dict.items():
-        copied[name] = {
-            key: [list(edge) if isinstance(edge, list | tuple) else edge for edge in value]
-            if isinstance(value, list)
-            else value
-            for key, value in shape.items()
-        }
+        if not isinstance(shape, dict):
+            copied[name] = shape
+            continue
+        copied[name] = {}
+        for key, value in shape.items():
+            if isinstance(value, list | tuple):
+                copied[name][key] = [
+                    list(edge) if isinstance(edge, list | tuple) else edge for edge in value
+                ]
+            else:
+                copied[name][key] = value
     return copied
 
 
+def _validate_node_dict(node_dict: NodeDict) -> None:
+    if not isinstance(node_dict, dict) or not node_dict:
+        raise ValueError("node_dict must be a non-empty dictionary of node names to 3D positions.")
+
+    for node_name, position in node_dict.items():
+        if not isinstance(node_name, str) or not node_name:
+            raise ValueError(f"Node name {node_name!r} must be a non-empty string.")
+        if not isinstance(position, list | tuple | np.ndarray) or len(position) != 3:
+            raise ValueError(f"Node '{node_name}' position must contain exactly three numbers.")
+        try:
+            np.array(position, dtype=float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Node '{node_name}' position must contain only numbers.") from exc
+
+
+def _validate_triangle_dict(node_dict: NodeDict, triangle_dict: TriangleDict) -> None:
+    if not isinstance(triangle_dict, dict) or not triangle_dict:
+        raise ValueError(
+            "triangle_dict must be a non-empty dictionary of triangle names to node lists."
+        )
+
+    for triangle_name, triangle_nodes in triangle_dict.items():
+        if not isinstance(triangle_name, str) or not triangle_name:
+            raise ValueError(f"Triangle name {triangle_name!r} must be a non-empty string.")
+        if not isinstance(triangle_nodes, list | tuple) or len(triangle_nodes) != 4:
+            raise ValueError(
+                f"Triangle '{triangle_name}' must contain exactly four node names: "
+                "three vertices followed by one passive node."
+            )
+
+        nodes = list(triangle_nodes[:3])
+        passive_node = triangle_nodes[3]
+        if not all(isinstance(node, str) and node for node in triangle_nodes):
+            raise ValueError(f"Triangle '{triangle_name}' entries must be non-empty node names.")
+        if len(set(nodes)) != 3:
+            raise ValueError(f"Triangle '{triangle_name}' vertices must be three unique nodes.")
+
+        missing_nodes = [node for node in triangle_nodes if node not in node_dict]
+        if missing_nodes:
+            missing = ", ".join(dict.fromkeys(missing_nodes))
+            raise ValueError(f"Triangle '{triangle_name}' references unknown node(s): {missing}.")
+        if passive_node not in nodes:
+            raise ValueError(
+                f"Triangle '{triangle_name}' passive node '{passive_node}' must be one "
+                "of its first three vertex nodes."
+            )
+
+
 def _validate_shape_dict(node_dict: NodeDict, shape_dict: ShapeDict) -> None:
+    if not isinstance(shape_dict, dict) or not shape_dict:
+        raise ValueError("shape_dict must be a non-empty dictionary of shape definitions.")
+
     for shape_name, shape in shape_dict.items():
+        if not isinstance(shape_name, str) or not shape_name:
+            raise ValueError(f"Shape name {shape_name!r} must be a non-empty string.")
+        if not isinstance(shape, dict):
+            raise ValueError(f"Shape '{shape_name}' must be a dictionary.")
         if "route" not in shape:
             raise ValueError(f"Shape '{shape_name}' is missing required 'route'.")
         if "active_edges" not in shape:
@@ -274,10 +337,12 @@ def _validate_shape_dict(node_dict: NodeDict, shape_dict: ShapeDict) -> None:
 
         route = shape["route"]
         active_edges = shape["active_edges"]
-        if not isinstance(route, list) or len(route) < 2:
+        if not isinstance(route, list | tuple) or len(route) < 2:
             raise ValueError(f"Shape '{shape_name}' route must contain at least two node names.")
         if not isinstance(active_edges, list):
             raise ValueError(f"Shape '{shape_name}' active_edges must be a list of node pairs.")
+        if not all(isinstance(node, str) and node for node in route):
+            raise ValueError(f"Shape '{shape_name}' route entries must be non-empty node names.")
 
         missing_nodes = [node for node in route if node not in node_dict]
         if missing_nodes:
