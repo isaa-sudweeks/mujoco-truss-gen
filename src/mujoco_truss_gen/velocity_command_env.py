@@ -24,7 +24,7 @@ class MujocoVelocityCommandEnv(MujocoRelativeObsEnv):
         self.action_space = spaces.Box(
             low=-self.config.speed,
             high=self.config.speed,
-            shape=(self.mj_model.model.nu,),
+            shape=(len(self.mj_model.external_actuator_ids),),
             dtype=np.float32,
         )
 

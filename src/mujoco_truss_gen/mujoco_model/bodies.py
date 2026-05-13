@@ -6,14 +6,19 @@ import mujoco
 import numpy as np
 
 from mujoco_truss_gen.mujoco_model.constants import (
+    BOX_SIZE,
     CONNECTOR_MASS,
     CONNECTOR_RADIUS,
+    HINGE_FORCE_RANGE,
+    HINGE_POSITION_KP,
     NODE_MASS,
     NODE_RADIUS,
     ROD_MASS,
     ROD_RADIUS,
+    TRIANGLE_BODY_MASS,
     TRUSS_RGBA,
 )
+from mujoco_truss_gen.mujoco_model.controllers import angle_bisector_actuator_name
 from mujoco_truss_gen.mujoco_model.geometry import triangle_frame
 from mujoco_truss_gen.mujoco_model.model_types import NodeDict, TriangleDict, Vector
 
@@ -36,8 +41,8 @@ def add_planar_node_body(
     node_body = parent_body.add_body(name=node_name, pos=local_position)
     node_body.add_site(name=node_name)
     node_geom = node_body.add_geom(
-        type=mujoco.mjtGeom.mjGEOM_SPHERE,
-        size=[NODE_RADIUS],
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        size=BOX_SIZE,
         rgba=TRUSS_RGBA,
         mass=NODE_MASS,
     )
@@ -63,6 +68,13 @@ def add_planar_node_body(
             pos=[0.0, 0.0, 0.0],
             axis=[0.0, 1.0, 0.0],
         )
+
+    node_body.add_joint(
+        type=mujoco.mjtJoint.mjJNT_HINGE,
+        name=f"{node_name}_z_hinge",
+        axis=[0.0, 0.0, 1.0],
+        pos=[0.0, 0.0, 0.0],
+    )
 
     return node_body
 
@@ -167,12 +179,17 @@ def connect_node_to_ball(
         mass=ROD_MASS,
     )
     disable_geom_contacts(rod_geom)
-    rod.add_joint(
-        type=mujoco.mjtJoint.mjJNT_HINGE,
-        axis=[0.0, 0.0, 1.0],
-        damping=1.0,
-        stiffness=5.0,
+
+    actuator = spec.add_actuator(
+        name=angle_bisector_actuator_name(instance_name),
+        trntype=mujoco.mjtTrn.mjTRN_JOINT,
+        target=f"{instance_name}_z_hinge",
+        ctrllimited=True,
+        ctrlrange=[-np.pi, np.pi],
+        forcelimited=True,
+        forcerange=HINGE_FORCE_RANGE,
     )
+    actuator.set_to_position(kp=HINGE_POSITION_KP)
 
     constraint = spec.add_equality(
         name=f"connect_{instance_name}",
@@ -212,6 +229,9 @@ def create_triangle_bodies(
             name=f"tri_{triangle_name}", pos=positions[0].tolist()
         )
         triangle_body.quat = quaternion
+        triangle_body.explicitinertial = True
+        triangle_body.mass = TRIANGLE_BODY_MASS
+        triangle_body.inertia = [TRIANGLE_BODY_MASS] * 3
         triangle_body.add_freejoint()
 
         for index, instance_name in enumerate(node_names):

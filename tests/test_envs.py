@@ -181,6 +181,68 @@ def test_generation_does_not_mutate_custom_dictionaries() -> None:
     assert triangle_dict == original_triangles
 
 
+def test_realistic_angle_bisector_controller_aligns_connector_rods() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+        "node_4": [0.4, -0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+        "triangle_2": ["node_1", "node_4", "node_2", "node_1"],
+    }
+
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec(node_dict, triangle_dict, realistic=True),
+            max_steps=2,
+            nsubsteps=1,
+            speed=0.01,
+        )
+    )
+    try:
+        env.reset(seed=17)
+        controller = env.mj_model.angle_bisector_controller
+
+        assert controller.enabled
+        assert {
+            target.node_name for target in controller.targets
+        } == {"node_1", "node_2", "node_1_tri_triangle_2", "node_2_tri_triangle_2"}
+        assert env.action_space.shape == (4,)
+        assert env.mj_model.model.nu == 8
+        assert all(
+            name.startswith("bisector_act_")
+            for name in env.mj_model.internal_actuator_names
+        )
+        assert not any(
+            name.startswith("bisector_act_")
+            for name in env.mj_model.external_actuator_names
+        )
+
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        env.step(action)
+
+        for target in controller.targets:
+            node_pos = env.mj_model.data.site_xpos[target.node_site_id]
+            neighbor_a = env.mj_model.data.site_xpos[target.neighbor_site_ids[0]]
+            neighbor_b = env.mj_model.data.site_xpos[target.neighbor_site_ids[1]]
+            dir_a = _unit(neighbor_a - node_pos)
+            dir_b = _unit(neighbor_b - node_pos)
+            bisector = _unit(dir_a + dir_b)
+
+            tip_site_id = mujoco.mj_name2id(
+                env.mj_model.model,
+                mujoco.mjtObj.mjOBJ_SITE,
+                f"tip_site_{target.node_name}",
+            )
+            rod_direction = _unit(env.mj_model.data.site_xpos[tip_site_id] - node_pos)
+
+            assert float(np.dot(rod_direction, bisector)) == pytest.approx(-1.0, abs=1e-4)
+    finally:
+        env.close()
+
+
 def test_routed_shape_spec_compiles_and_runs() -> None:
     node_dict = {
         "node_1": [0.0, 0.0, 0.2],
@@ -253,3 +315,7 @@ def test_actuator_names_are_edge_based() -> None:
     actuator_names = {model.actuator(index).name for index in range(model.nu)}
 
     assert actuator_names == {"act_12", "act_34", "act_23", "act_14"}
+
+
+def _unit(vector: np.ndarray) -> np.ndarray:
+    return vector / np.linalg.norm(vector)

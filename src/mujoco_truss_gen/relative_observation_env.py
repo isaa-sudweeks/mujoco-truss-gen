@@ -28,7 +28,7 @@ class MujocoRelativeObsEnv(MujocoTrussEnv):
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(self.mj_model.model.nu,),
+            shape=(len(self.mj_model.external_actuator_ids),),
             dtype=np.float32,
         )
 
@@ -58,16 +58,17 @@ class MujocoRelativeObsEnv(MujocoTrussEnv):
             [
                 np.array(relative_positions, dtype=np.float32),
                 np.array(absolute_velocities, dtype=np.float32),
-                self.mj_model.data.ctrl.copy().astype(np.float32),
+                self.mj_model.get_external_ctrl().astype(np.float32),
             ]
         ).astype(np.float32)
 
     def step(self, action):
         action = np.asarray(action, dtype=np.float32)
         action = np.clip(action, self.action_space.low, self.action_space.high)
-        ctrl = self.mj_model.data.ctrl.copy() + action * self.config.speed
-        ctrl_low = self.mj_model.model.actuator_ctrlrange[:, 0]
-        ctrl_high = self.mj_model.model.actuator_ctrlrange[:, 1]
+        ctrl = self.mj_model.get_external_ctrl() + action * self.config.speed
+        ctrlrange = self.mj_model.get_external_ctrlrange()
+        ctrl_low = ctrlrange[:, 0]
+        ctrl_high = ctrlrange[:, 1]
         ctrl = np.clip(ctrl, ctrl_low, ctrl_high)
 
         self._advance(ctrl)
