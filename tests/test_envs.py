@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from copy import deepcopy
 
 import mujoco
@@ -49,6 +50,60 @@ def test_builtin_presets_compile() -> None:
 
     for preset_name in ("octahedron", "icosahedron", "solar_array"):
         get_mujoco_spec(preset_name, realistic=True).compile()
+
+
+def test_generated_world_uses_professional_scene_defaults() -> None:
+    root = ET.fromstring(get_mujoco_spec("tetrahedron", realistic=False).to_xml())
+
+    ground = root.find("./worldbody/geom[@name='ground']")
+    assert ground is not None
+    assert ground.get("type") == "plane"
+    assert ground.get("material") == "ground_grid"
+
+    ground_texture = root.find("./asset/texture[@name='ground_checker']")
+    assert ground_texture is not None
+    assert ground_texture.get("builtin") == "checker"
+
+    skybox = root.find("./asset/texture[@name='skybox']")
+    assert skybox is not None
+    assert skybox.get("type") == "skybox"
+
+    light_names = {
+        light.get("name") for light in root.findall("./worldbody/light")
+    }
+    assert {"key", "fill"} <= light_names
+
+
+def test_generated_spec_uses_firehose_steel_and_black_materials() -> None:
+    root = ET.fromstring(get_mujoco_spec("octahedron", realistic=True).to_xml())
+
+    firehose_material = root.find("./asset/material[@name='blue_firehose']")
+    assert firehose_material is not None
+    assert firehose_material.get("texture") is None
+    assert firehose_material.get("rgba") == "0 0.1804 0.3647 1"
+    assert firehose_material.get("reflectance") == "0.01"
+    assert firehose_material.get("specular") == "0.08"
+
+    for tendon in root.findall(".//tendon/spatial"):
+        if tendon.get("name", "").startswith("Perimeter_Constraint_"):
+            assert tendon.get("material") is None
+            assert tendon.get("width") == "0.0001"
+            assert tendon.get("rgba") == "0 0 0 0"
+        else:
+            assert tendon.get("material") == "blue_firehose"
+
+    rod_geom = next(
+        body.find("./geom")
+        for body in root.findall(".//body")
+        if body.get("name", "").startswith("rod_")
+    )
+    assert rod_geom is not None
+    assert rod_geom.get("material") == "connector_steel"
+
+    node_geom = root.find(".//body[@name='node_1']/geom")
+    assert node_geom is not None
+    assert node_geom.get("material") == "node_black"
+    assert node_geom.get("rgba") == "0.18 0.18 0.18 1"
 
 
 def test_icosahedron_definition_shape() -> None:
@@ -181,6 +236,97 @@ def test_generation_does_not_mutate_custom_dictionaries() -> None:
     assert triangle_dict == original_triangles
 
 
+def test_realistic_angle_bisector_controller_aligns_connector_rods() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+        "node_4": [0.4, -0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+        "triangle_2": ["node_1", "node_4", "node_2", "node_1"],
+    }
+
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec(node_dict, triangle_dict, realistic=True),
+            max_steps=2,
+            nsubsteps=1,
+            speed=0.01,
+        )
+    )
+    try:
+        env.reset(seed=17)
+        controller = env.mj_model.angle_bisector_controller
+
+        assert controller.enabled
+        assert {
+            target.node_name for target in controller.targets
+        } == {"node_1", "node_2", "node_1_tri_triangle_2", "node_2_tri_triangle_2"}
+        assert env.action_space.shape == (4,)
+        assert env.mj_model.model.nu == 8
+        assert all(
+            name.startswith("bisector_act_")
+            for name in env.mj_model.internal_actuator_names
+        )
+        assert not any(
+            name.startswith("bisector_act_")
+            for name in env.mj_model.external_actuator_names
+        )
+
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        env.step(action)
+
+        for target in controller.targets:
+            node_pos = env.mj_model.data.site_xpos[target.node_site_id]
+            neighbor_a = env.mj_model.data.site_xpos[target.neighbor_site_ids[0]]
+            neighbor_b = env.mj_model.data.site_xpos[target.neighbor_site_ids[1]]
+            dir_a = _unit(neighbor_a - node_pos)
+            dir_b = _unit(neighbor_b - node_pos)
+            bisector = _unit(dir_a + dir_b)
+
+            tip_site_id = mujoco.mj_name2id(
+                env.mj_model.model,
+                mujoco.mjtObj.mjOBJ_SITE,
+                f"tip_site_{target.node_name}",
+            )
+            rod_direction = _unit(env.mj_model.data.site_xpos[tip_site_id] - node_pos)
+
+            assert float(np.dot(rod_direction, bisector)) == pytest.approx(-1.0, abs=1e-4)
+    finally:
+        env.close()
+
+
+def test_realistic_node_box_face_normal_points_to_connector_ball() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+        "node_4": [0.4, -0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+        "triangle_2": ["node_1", "node_4", "node_2", "node_1"],
+    }
+
+    root = ET.fromstring(get_mujoco_spec(node_dict, triangle_dict, realistic=True).to_xml())
+
+    for node_name in ("node_1", "node_2", "node_1_tri_triangle_2", "node_2_tri_triangle_2"):
+        node_body = root.find(f".//body[@name='{node_name}']")
+        assert node_body is not None
+
+        box_geom = node_body.find("./geom[@type='box']")
+        assert box_geom is not None
+        face_normal = _quat_rotate_x(_xml_vector(box_geom.get("quat", "1 0 0 0")))
+
+        tip_site = node_body.find(f"./body[@name='rod_{node_name}']/site")
+        assert tip_site is not None
+        connector_direction = _unit(_xml_vector(tip_site.get("pos", "")))
+
+        assert float(np.dot(face_normal, connector_direction)) == pytest.approx(1.0)
+
+
 def test_routed_shape_spec_compiles_and_runs() -> None:
     node_dict = {
         "node_1": [0.0, 0.0, 0.2],
@@ -253,3 +399,22 @@ def test_actuator_names_are_edge_based() -> None:
     actuator_names = {model.actuator(index).name for index in range(model.nu)}
 
     assert actuator_names == {"act_12", "act_34", "act_23", "act_14"}
+
+
+def _unit(vector: np.ndarray) -> np.ndarray:
+    return vector / np.linalg.norm(vector)
+
+
+def _xml_vector(value: str) -> np.ndarray:
+    return np.fromstring(value, sep=" ", dtype=float)
+
+
+def _quat_rotate_x(quat: np.ndarray) -> np.ndarray:
+    w, x, y, z = quat
+    return np.array(
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y + z * w),
+            2.0 * (x * z - y * w),
+        ]
+    )

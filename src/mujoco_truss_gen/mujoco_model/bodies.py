@@ -6,14 +6,22 @@ import mujoco
 import numpy as np
 
 from mujoco_truss_gen.mujoco_model.constants import (
+    BOX_SIZE,
     CONNECTOR_MASS,
     CONNECTOR_RADIUS,
+    HINGE_FORCE_RANGE,
+    HINGE_POSITION_KP,
     NODE_MASS,
+    NODE_MATERIAL,
     NODE_RADIUS,
+    NODE_RGBA,
     ROD_MASS,
+    ROD_MATERIAL,
     ROD_RADIUS,
-    TRUSS_RGBA,
+    ROD_RGBA,
+    TRIANGLE_BODY_MASS,
 )
+from mujoco_truss_gen.mujoco_model.controllers import angle_bisector_actuator_name
 from mujoco_truss_gen.mujoco_model.geometry import triangle_frame
 from mujoco_truss_gen.mujoco_model.model_types import NodeDict, TriangleDict, Vector
 
@@ -31,16 +39,23 @@ def disable_geom_contacts(geom: Any) -> None:
 
 
 def add_planar_node_body(
-    parent_body: Any, node_name: str, local_position: Vector, index: int
+    parent_body: Any,
+    node_name: str,
+    local_position: Vector,
+    index: int,
+    connector_direction: Vector | None = None,
 ) -> Any:
     node_body = parent_body.add_body(name=node_name, pos=local_position)
     node_body.add_site(name=node_name)
     node_geom = node_body.add_geom(
-        type=mujoco.mjtGeom.mjGEOM_SPHERE,
-        size=[NODE_RADIUS],
-        rgba=TRUSS_RGBA,
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        size=BOX_SIZE,
+        rgba=NODE_RGBA,
+        material=NODE_MATERIAL,
         mass=NODE_MASS,
     )
+    if connector_direction is not None:
+        node_geom.quat = _face_normal_quat(connector_direction)
     disable_geom_contacts(node_geom)
 
     if index == 1:
@@ -64,7 +79,27 @@ def add_planar_node_body(
             axis=[0.0, 1.0, 0.0],
         )
 
+    node_body.add_joint(
+        type=mujoco.mjtJoint.mjJNT_HINGE,
+        name=f"{node_name}_z_hinge",
+        axis=[0.0, 0.0, 1.0],
+        pos=[0.0, 0.0, 0.0],
+    )
+
     return node_body
+
+
+def _face_normal_quat(connector_direction: Vector) -> list[float]:
+    direction = np.array(connector_direction, dtype=float)
+    planar_direction = direction[:2]
+    norm = float(np.linalg.norm(planar_direction))
+    if norm < 1e-10:
+        return [1.0, 0.0, 0.0, 0.0]
+
+    x_axis = planar_direction / norm
+    angle = float(np.arctan2(x_axis[1], x_axis[0]))
+    half_angle = 0.5 * angle
+    return [float(np.cos(half_angle)), 0.0, 0.0, float(np.sin(half_angle))]
 
 
 def add_free_node_body(spec: mujoco.MjSpec, node_name: str, position: Vector) -> Any:
@@ -75,7 +110,8 @@ def add_free_node_body(spec: mujoco.MjSpec, node_name: str, position: Vector) ->
     node_geom = node_body.add_geom(
         type=mujoco.mjtGeom.mjGEOM_SPHERE,
         size=[NODE_RADIUS],
-        rgba=TRUSS_RGBA,
+        rgba=NODE_RGBA,
+        material=NODE_MATERIAL,
         mass=NODE_MASS,
     )
     disable_geom_contacts(node_geom)
@@ -88,7 +124,8 @@ def add_slide_node_body(spec: mujoco.MjSpec, node_name: str, position: Vector) -
     node_body.add_geom(
         type=mujoco.mjtGeom.mjGEOM_SPHERE,
         size=[NODE_RADIUS],
-        rgba=TRUSS_RGBA,
+        rgba=NODE_RGBA,
+        material=NODE_MATERIAL,
     )
     node_body.add_joint(
         type=mujoco.mjtJoint.mjJNT_SLIDE,
@@ -131,7 +168,8 @@ def create_connector_balls(
         ball_geom = ball.add_geom(
             type=mujoco.mjtGeom.mjGEOM_SPHERE,
             size=[CONNECTOR_RADIUS],
-            rgba=TRUSS_RGBA,
+            rgba=NODE_RGBA,
+            material=NODE_MATERIAL,
             mass=CONNECTOR_MASS,
         )
         disable_geom_contacts(ball_geom)
@@ -163,16 +201,22 @@ def connect_node_to_ball(
         type=mujoco.mjtGeom.mjGEOM_CYLINDER,
         fromto=[0.0, 0.0, 0.0, *rod_vector.tolist()],
         size=[ROD_RADIUS],
-        rgba=TRUSS_RGBA,
+        rgba=ROD_RGBA,
+        material=ROD_MATERIAL,
         mass=ROD_MASS,
     )
     disable_geom_contacts(rod_geom)
-    rod.add_joint(
-        type=mujoco.mjtJoint.mjJNT_HINGE,
-        axis=[0.0, 0.0, 1.0],
-        damping=1.0,
-        stiffness=5.0,
+
+    actuator = spec.add_actuator(
+        name=angle_bisector_actuator_name(instance_name),
+        trntype=mujoco.mjtTrn.mjTRN_JOINT,
+        target=f"{instance_name}_z_hinge",
+        ctrllimited=True,
+        ctrlrange=[-np.pi, np.pi],
+        forcelimited=True,
+        forcerange=HINGE_FORCE_RANGE,
     )
+    actuator.set_to_position(kp=HINGE_POSITION_KP)
 
     constraint = spec.add_equality(
         name=f"connect_{instance_name}",
@@ -212,17 +256,27 @@ def create_triangle_bodies(
             name=f"tri_{triangle_name}", pos=positions[0].tolist()
         )
         triangle_body.quat = quaternion
+        triangle_body.explicitinertial = True
+        triangle_body.mass = TRIANGLE_BODY_MASS
+        triangle_body.inertia = [TRIANGLE_BODY_MASS] * 3
         triangle_body.add_freejoint()
 
         for index, instance_name in enumerate(node_names):
+            original_name = find_original_node(node_instances, instance_name)
+            connector_direction = None
+            if original_name and original_name in connector_balls:
+                ball_position = np.array(connector_balls[original_name].pos, dtype=float)
+                node_position = np.array(node_dict[instance_name], dtype=float)
+                connector_direction = np.dot(rotation_matrix.T, ball_position - node_position)
+
             node_body = add_planar_node_body(
                 triangle_body,
                 node_name=instance_name,
                 local_position=local_positions[index],
                 index=index,
+                connector_direction=connector_direction,
             )
 
-            original_name = find_original_node(node_instances, instance_name)
             if not original_name or original_name not in connector_balls:
                 continue
 
@@ -244,11 +298,75 @@ def create_node_bodies(spec: mujoco.MjSpec, node_dict: NodeDict) -> None:
 
 
 def build_world() -> mujoco.MjSpec:
-    spec = mujoco.MjSpec()
-    spec.worldbody.add_light(name="top", pos=[0.0, 0.0, 1.0])
-    spec.worldbody.add_geom(
-        type=mujoco.mjtGeom.mjGEOM_PLANE,
-        size=[10.0, 10.0, 0.1],
-        rgba=TRUSS_RGBA,
+    spec = mujoco.MjSpec.from_string(
+        """
+<mujoco>
+  <visual>
+    <global azimuth="120" elevation="-25"/>
+    <headlight ambient="0.24 0.24 0.24"
+               diffuse="0.56 0.56 0.56"
+               specular="0.16 0.16 0.16"/>
+    <rgba haze="0.76 0.82 0.88 1"/>
+  </visual>
+  <asset>
+    <texture name="skybox"
+             type="skybox"
+             builtin="gradient"
+             rgb1="0.54 0.64 0.76"
+             rgb2="0.84 0.88 0.93"
+             width="512"
+             height="3072"/>
+    <texture name="ground_checker"
+             type="2d"
+             builtin="checker"
+             rgb1="0.68 0.70 0.72"
+             rgb2="0.44 0.47 0.51"
+             mark="edge"
+             markrgb="0.56 0.58 0.60"
+             width="512"
+             height="512"/>
+    <material name="ground_grid"
+              texture="ground_checker"
+              texrepeat="12 12"
+              texuniform="true"
+              reflectance="0.12"/>
+    <material name="blue_firehose"
+              rgba="0.0 0.1804 0.3647 1"
+              specular="0.08"
+              shininess="0.12"
+              reflectance="0.01"/>
+    <material name="connector_steel"
+              rgba="0.62 0.64 0.66 1"
+              specular="0.75"
+              shininess="0.65"
+              reflectance="0.22"/>
+    <material name="node_black"
+              rgba="0.18 0.18 0.18 1"
+              specular="0.25"
+              shininess="0.35"
+              reflectance="0.08"/>
+  </asset>
+  <worldbody>
+    <light name="key"
+           pos="0 -3.5 5"
+           dir="0 0.7 -1"
+           directional="true"
+           diffuse="0.56 0.56 0.56"
+           ambient="0.13 0.13 0.13"
+           specular="0.16 0.16 0.16"/>
+    <light name="fill"
+           pos="3.5 3.5 4"
+           dir="-0.6 -0.6 -1"
+           directional="true"
+           diffuse="0.18 0.20 0.23"
+           ambient="0.05 0.05 0.05"
+           specular="0.05 0.05 0.05"/>
+    <geom name="ground"
+          type="plane"
+          size="12 12 0.1"
+          material="ground_grid"/>
+  </worldbody>
+</mujoco>
+"""
     )
     return spec

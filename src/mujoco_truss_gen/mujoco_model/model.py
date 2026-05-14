@@ -6,6 +6,10 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from mujoco_truss_gen.mujoco_model.controllers import (
+    ANGLE_BISECTOR_ACTUATOR_PREFIX,
+    AngleBisectorController,
+)
 from mujoco_truss_gen.mujoco_model.tendons import initialize_actuator_lengths
 
 ModelSource = mujoco.MjSpec | mujoco.MjModel | str | Path
@@ -45,10 +49,40 @@ class MujocoModel:
         else:
             self._load_model_metadata_from_model()
 
+        self.angle_bisector_controller = AngleBisectorController(self.model, self.xml)
+        self.internal_actuator_ids = np.array(
+            [
+                actuator_id
+                for actuator_id in range(self.model.nu)
+                if self.model.actuator(actuator_id).name.startswith(
+                    ANGLE_BISECTOR_ACTUATOR_PREFIX
+                )
+            ],
+            dtype=int,
+        )
+        internal_actuator_ids = set(self.internal_actuator_ids.tolist())
+        self.external_actuator_ids = np.array(
+            [
+                actuator_id
+                for actuator_id in range(self.model.nu)
+                if actuator_id not in internal_actuator_ids
+            ],
+            dtype=int,
+        )
+        self.internal_actuator_names = [
+            self.model.actuator(actuator_id).name
+            for actuator_id in self.internal_actuator_ids
+        ]
+        self.external_actuator_names = [
+            self.model.actuator(actuator_id).name
+            for actuator_id in self.external_actuator_ids
+        ]
         self.init_qpos = self.data.qpos.copy()
         self.init_qvel = self.data.qvel.copy()
         self.ctrl_home = np.zeros(self.model.nu, dtype=float)
         self.act_home = np.ones(self.model.na, dtype=float)
+        mujoco.mj_forward(self.model, self.data)
+        self.apply_angle_bisector_control()
         mujoco.mj_forward(self.model, self.data)
         initialize_actuator_lengths(self.model, self.data)
         self.init_act = self.data.act.copy()
@@ -213,6 +247,20 @@ class MujocoModel:
         if self.model.na:
             self.data.act[:] = self.init_act.copy()
         mujoco.mj_forward(self.model, self.data)
+        self.apply_angle_bisector_control()
+        mujoco.mj_forward(self.model, self.data)
+
+    def apply_angle_bisector_control(self) -> None:
+        self.angle_bisector_controller.update(self.model, self.data)
+
+    def get_external_ctrlrange(self) -> np.ndarray:
+        return self.model.actuator_ctrlrange[self.external_actuator_ids]
+
+    def get_external_ctrl(self) -> np.ndarray:
+        return self.data.ctrl[self.external_actuator_ids].copy()
+
+    def set_external_ctrl(self, ctrl: np.ndarray) -> None:
+        self.data.ctrl[self.external_actuator_ids] = ctrl
 
     def get_node_loc_dict(self) -> dict[str, np.ndarray]:
         return {self.model.body(i).name: self.data.xpos[i].copy() for i in range(self.model.nbody)}

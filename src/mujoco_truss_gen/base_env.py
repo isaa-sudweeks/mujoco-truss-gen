@@ -91,7 +91,7 @@ class MujocoTrussEnv(gym.Env):
         ).astype(np.float32)
 
     def _define_action_space(self) -> None:
-        ctrlrange = self.mj_model.model.actuator_ctrlrange
+        ctrlrange = self.mj_model.get_external_ctrlrange()
         self.action_space = spaces.Box(
             low=ctrlrange[:, 0].astype(np.float32),
             high=ctrlrange[:, 1].astype(np.float32),
@@ -116,9 +116,10 @@ class MujocoTrussEnv(gym.Env):
         return self._get_obs(), reward, terminated, truncated, info
 
     def _advance(self, ctrl: np.ndarray) -> None:
-        self.mj_model.data.ctrl[:] = self._apply_control_noise(ctrl)
+        self.mj_model.set_external_ctrl(self._apply_control_noise(ctrl))
 
         for _ in range(self.nsubsteps):
+            self.mj_model.apply_angle_bisector_control()
             mujoco.mj_step(self.mj_model.model, self.mj_model.data)
             if self.viewer is not None:
                 self.viewer.sync()
@@ -127,8 +128,9 @@ class MujocoTrussEnv(gym.Env):
 
     def _apply_control_noise(self, ctrl: np.ndarray) -> np.ndarray:
         ctrl = np.asarray(ctrl, dtype=np.float32)
-        ctrl_low = self.mj_model.model.actuator_ctrlrange[:, 0]
-        ctrl_high = self.mj_model.model.actuator_ctrlrange[:, 1]
+        ctrlrange = self.mj_model.get_external_ctrlrange()
+        ctrl_low = ctrlrange[:, 0]
+        ctrl_high = ctrlrange[:, 1]
         clipped_ctrl = np.clip(ctrl, ctrl_low, ctrl_high)
 
         if not self.apply_control_noise:

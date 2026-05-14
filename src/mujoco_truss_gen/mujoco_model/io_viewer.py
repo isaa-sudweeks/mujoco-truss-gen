@@ -5,6 +5,7 @@ from pathlib import Path
 
 import mujoco
 
+from mujoco_truss_gen.mujoco_model.controllers import AngleBisectorController
 from mujoco_truss_gen.mujoco_model.tendons import initialize_actuator_lengths
 
 
@@ -31,12 +32,15 @@ def view(spec: mujoco.MjSpec) -> None:
             "view() expects a mujoco.MjModel or an object with 'model' and 'data' attributes."
         )
 
+    controller = AngleBisectorController(mj_model, spec.to_xml())
     initialize_actuator_lengths(mj_model, data)
+    controller.update(mj_model, data)
     with mujoco_viewer.launch_passive(mj_model, data) as viewer:
         viewer.sync()
         while viewer.is_running():
             if data.time == 0.0:
                 initialize_actuator_lengths(mj_model, data)
+            controller.update(mj_model, data)
             mujoco.mj_step(mj_model, data)
             viewer.sync()
             time.sleep(max(mj_model.opt.timestep, 0.001))

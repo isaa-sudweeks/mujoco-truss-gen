@@ -51,7 +51,7 @@ def add_perimeter_constraint(
             passive_edge_tendon = edge_tendons[edge_key(edge_from, edge_to)]
 
         tendon_name = f"Perimeter_Constraint_{index}"
-        tendon = spec.add_tendon(name=tendon_name)
+        tendon = spec.add_tendon(name=tendon_name, width=0.0001, rgba=[0.0, 0.0, 0.0, 0.0])
         tendon.wrap_site(active_nodes[0])
         tendon.wrap_site(passive_node)
         tendon.wrap_site(active_nodes[1])
