@@ -36,7 +36,11 @@ def disable_geom_contacts(geom: Any) -> None:
 
 
 def add_planar_node_body(
-    parent_body: Any, node_name: str, local_position: Vector, index: int
+    parent_body: Any,
+    node_name: str,
+    local_position: Vector,
+    index: int,
+    connector_direction: Vector | None = None,
 ) -> Any:
     node_body = parent_body.add_body(name=node_name, pos=local_position)
     node_body.add_site(name=node_name)
@@ -46,6 +50,8 @@ def add_planar_node_body(
         rgba=TRUSS_RGBA,
         mass=NODE_MASS,
     )
+    if connector_direction is not None:
+        node_geom.quat = _face_normal_quat(connector_direction)
     disable_geom_contacts(node_geom)
 
     if index == 1:
@@ -77,6 +83,19 @@ def add_planar_node_body(
     )
 
     return node_body
+
+
+def _face_normal_quat(connector_direction: Vector) -> list[float]:
+    direction = np.array(connector_direction, dtype=float)
+    planar_direction = direction[:2]
+    norm = float(np.linalg.norm(planar_direction))
+    if norm < 1e-10:
+        return [1.0, 0.0, 0.0, 0.0]
+
+    x_axis = planar_direction / norm
+    angle = float(np.arctan2(x_axis[1], x_axis[0]))
+    half_angle = 0.5 * angle
+    return [float(np.cos(half_angle)), 0.0, 0.0, float(np.sin(half_angle))]
 
 
 def add_free_node_body(spec: mujoco.MjSpec, node_name: str, position: Vector) -> Any:
@@ -235,14 +254,21 @@ def create_triangle_bodies(
         triangle_body.add_freejoint()
 
         for index, instance_name in enumerate(node_names):
+            original_name = find_original_node(node_instances, instance_name)
+            connector_direction = None
+            if original_name and original_name in connector_balls:
+                ball_position = np.array(connector_balls[original_name].pos, dtype=float)
+                node_position = np.array(node_dict[instance_name], dtype=float)
+                connector_direction = np.dot(rotation_matrix.T, ball_position - node_position)
+
             node_body = add_planar_node_body(
                 triangle_body,
                 node_name=instance_name,
                 local_position=local_positions[index],
                 index=index,
+                connector_direction=connector_direction,
             )
 
-            original_name = find_original_node(node_instances, instance_name)
             if not original_name or original_name not in connector_balls:
                 continue
 
@@ -264,11 +290,60 @@ def create_node_bodies(spec: mujoco.MjSpec, node_dict: NodeDict) -> None:
 
 
 def build_world() -> mujoco.MjSpec:
-    spec = mujoco.MjSpec()
-    spec.worldbody.add_light(name="top", pos=[0.0, 0.0, 1.0])
-    spec.worldbody.add_geom(
-        type=mujoco.mjtGeom.mjGEOM_PLANE,
-        size=[10.0, 10.0, 0.1],
-        rgba=TRUSS_RGBA,
+    spec = mujoco.MjSpec.from_string(
+        """
+<mujoco>
+  <visual>
+    <global azimuth="120" elevation="-25"/>
+    <headlight ambient="0.24 0.24 0.24"
+               diffuse="0.56 0.56 0.56"
+               specular="0.16 0.16 0.16"/>
+    <rgba haze="0.76 0.82 0.88 1"/>
+  </visual>
+  <asset>
+    <texture name="skybox"
+             type="skybox"
+             builtin="gradient"
+             rgb1="0.54 0.64 0.76"
+             rgb2="0.84 0.88 0.93"
+             width="512"
+             height="3072"/>
+    <texture name="ground_checker"
+             type="2d"
+             builtin="checker"
+             rgb1="0.68 0.70 0.72"
+             rgb2="0.44 0.47 0.51"
+             mark="edge"
+             markrgb="0.56 0.58 0.60"
+             width="512"
+             height="512"/>
+    <material name="ground_grid"
+              texture="ground_checker"
+              texrepeat="12 12"
+              texuniform="true"
+              reflectance="0.12"/>
+  </asset>
+  <worldbody>
+    <light name="key"
+           pos="0 -3.5 5"
+           dir="0 0.7 -1"
+           directional="true"
+           diffuse="0.56 0.56 0.56"
+           ambient="0.13 0.13 0.13"
+           specular="0.16 0.16 0.16"/>
+    <light name="fill"
+           pos="3.5 3.5 4"
+           dir="-0.6 -0.6 -1"
+           directional="true"
+           diffuse="0.18 0.20 0.23"
+           ambient="0.05 0.05 0.05"
+           specular="0.05 0.05 0.05"/>
+    <geom name="ground"
+          type="plane"
+          size="12 12 0.1"
+          material="ground_grid"/>
+  </worldbody>
+</mujoco>
+"""
     )
     return spec

@@ -20,7 +20,8 @@ Current scope:
 - Generate MuJoCo `MjSpec` models for triangle-based truss structures.
 - Generate built-in octahedron and icosahedron robot presets.
 - Build either an abstract per-node slide-joint model or a more realistic
-  triangle-body model with connector balls for shared nodes.
+  triangle-body model with connector balls, rods, and face-aligned shared-node
+  connectors.
 - Add tendon actuators and perimeter constraints.
 - Save generated MuJoCo XML.
 - Wrap generated models in Gymnasium-compatible environments.
@@ -294,6 +295,10 @@ changes caused by the active edges. Routed shape dictionaries currently support
 `get_mujoco_spec()` and `build_triangle()` treat caller-provided dictionaries as
 read-only inputs. The realistic builder clones shared nodes internally, but it
 does not mutate the original `node_dict` or `triangle_dict` passed by the caller.
+In realistic mode, each triangle gets its own node-body instances. Vertices that
+were shared in the input are tied back together through connector balls, and the
+generated node boxes are rotated so their local face normal points toward the
+connector rod.
 
 ## Graph Neural Network (GNN) Utilities
 
@@ -320,8 +325,8 @@ x_tensor = torch.from_numpy(node_features)
 
 Public generation helpers:
 
-- `build_world()` creates a base `mujoco.MjSpec` containing a ground plane and
-  top light.
+- `build_world()` creates a base `mujoco.MjSpec` containing a checker-textured
+  ground plane, bright skybox, and key/fill lighting.
 - `build_triangle(spec, node_dict, triangle_dict, realistic=False)` adds truss
   bodies, sites, tendons, actuators, and perimeter constraints to an existing
   spec.
@@ -369,9 +374,12 @@ Model modes:
 - `realistic=False` creates one world-body per node with slide joints on `x`,
   `y`, and `z`. This is the simpler abstract model and is useful for fast
   algorithm development.
-- `realistic=True` creates triangle bodies, clones shared triangle nodes inside
-  the generated model, and connects shared vertices through connector balls.
-  This is intended to better represent the triangle-module structure.
+- `realistic=True` creates one free triangle body per triangle, clones shared
+  triangle nodes inside the generated model, and connects shared vertices through
+  connector balls. Shared-node boxes are face-aligned toward their connector rod,
+  so the visible box face and rod direction represent the intended module
+  connection geometry. This is intended to better represent the triangle-module
+  structure.
 
 ## Environment Contract
 

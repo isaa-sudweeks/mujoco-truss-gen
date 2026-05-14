@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from copy import deepcopy
 
 import mujoco
@@ -49,6 +50,28 @@ def test_builtin_presets_compile() -> None:
 
     for preset_name in ("octahedron", "icosahedron", "solar_array"):
         get_mujoco_spec(preset_name, realistic=True).compile()
+
+
+def test_generated_world_uses_professional_scene_defaults() -> None:
+    root = ET.fromstring(get_mujoco_spec("tetrahedron", realistic=False).to_xml())
+
+    ground = root.find("./worldbody/geom[@name='ground']")
+    assert ground is not None
+    assert ground.get("type") == "plane"
+    assert ground.get("material") == "ground_grid"
+
+    ground_texture = root.find("./asset/texture[@name='ground_checker']")
+    assert ground_texture is not None
+    assert ground_texture.get("builtin") == "checker"
+
+    skybox = root.find("./asset/texture[@name='skybox']")
+    assert skybox is not None
+    assert skybox.get("type") == "skybox"
+
+    light_names = {
+        light.get("name") for light in root.findall("./worldbody/light")
+    }
+    assert {"key", "fill"} <= light_names
 
 
 def test_icosahedron_definition_shape() -> None:
@@ -243,6 +266,35 @@ def test_realistic_angle_bisector_controller_aligns_connector_rods() -> None:
         env.close()
 
 
+def test_realistic_node_box_face_normal_points_to_connector_ball() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+        "node_4": [0.4, -0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+        "triangle_2": ["node_1", "node_4", "node_2", "node_1"],
+    }
+
+    root = ET.fromstring(get_mujoco_spec(node_dict, triangle_dict, realistic=True).to_xml())
+
+    for node_name in ("node_1", "node_2", "node_1_tri_triangle_2", "node_2_tri_triangle_2"):
+        node_body = root.find(f".//body[@name='{node_name}']")
+        assert node_body is not None
+
+        box_geom = node_body.find("./geom[@type='box']")
+        assert box_geom is not None
+        face_normal = _quat_rotate_x(_xml_vector(box_geom.get("quat", "1 0 0 0")))
+
+        tip_site = node_body.find(f"./body[@name='rod_{node_name}']/site")
+        assert tip_site is not None
+        connector_direction = _unit(_xml_vector(tip_site.get("pos", "")))
+
+        assert float(np.dot(face_normal, connector_direction)) == pytest.approx(1.0)
+
+
 def test_routed_shape_spec_compiles_and_runs() -> None:
     node_dict = {
         "node_1": [0.0, 0.0, 0.2],
@@ -319,3 +371,18 @@ def test_actuator_names_are_edge_based() -> None:
 
 def _unit(vector: np.ndarray) -> np.ndarray:
     return vector / np.linalg.norm(vector)
+
+
+def _xml_vector(value: str) -> np.ndarray:
+    return np.fromstring(value, sep=" ", dtype=float)
+
+
+def _quat_rotate_x(quat: np.ndarray) -> np.ndarray:
+    w, x, y, z = quat
+    return np.array(
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y + z * w),
+            2.0 * (x * z - y * w),
+        ]
+    )
