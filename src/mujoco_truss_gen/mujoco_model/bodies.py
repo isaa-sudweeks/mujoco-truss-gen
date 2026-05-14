@@ -12,11 +12,14 @@ from mujoco_truss_gen.mujoco_model.constants import (
     HINGE_FORCE_RANGE,
     HINGE_POSITION_KP,
     NODE_MASS,
+    NODE_MATERIAL,
     NODE_RADIUS,
+    NODE_RGBA,
     ROD_MASS,
+    ROD_MATERIAL,
     ROD_RADIUS,
+    ROD_RGBA,
     TRIANGLE_BODY_MASS,
-    TRUSS_RGBA,
 )
 from mujoco_truss_gen.mujoco_model.controllers import angle_bisector_actuator_name
 from mujoco_truss_gen.mujoco_model.geometry import triangle_frame
@@ -47,7 +50,8 @@ def add_planar_node_body(
     node_geom = node_body.add_geom(
         type=mujoco.mjtGeom.mjGEOM_BOX,
         size=BOX_SIZE,
-        rgba=TRUSS_RGBA,
+        rgba=NODE_RGBA,
+        material=NODE_MATERIAL,
         mass=NODE_MASS,
     )
     if connector_direction is not None:
@@ -106,7 +110,8 @@ def add_free_node_body(spec: mujoco.MjSpec, node_name: str, position: Vector) ->
     node_geom = node_body.add_geom(
         type=mujoco.mjtGeom.mjGEOM_SPHERE,
         size=[NODE_RADIUS],
-        rgba=TRUSS_RGBA,
+        rgba=NODE_RGBA,
+        material=NODE_MATERIAL,
         mass=NODE_MASS,
     )
     disable_geom_contacts(node_geom)
@@ -119,7 +124,8 @@ def add_slide_node_body(spec: mujoco.MjSpec, node_name: str, position: Vector) -
     node_body.add_geom(
         type=mujoco.mjtGeom.mjGEOM_SPHERE,
         size=[NODE_RADIUS],
-        rgba=TRUSS_RGBA,
+        rgba=NODE_RGBA,
+        material=NODE_MATERIAL,
     )
     node_body.add_joint(
         type=mujoco.mjtJoint.mjJNT_SLIDE,
@@ -162,7 +168,8 @@ def create_connector_balls(
         ball_geom = ball.add_geom(
             type=mujoco.mjtGeom.mjGEOM_SPHERE,
             size=[CONNECTOR_RADIUS],
-            rgba=TRUSS_RGBA,
+            rgba=NODE_RGBA,
+            material=NODE_MATERIAL,
             mass=CONNECTOR_MASS,
         )
         disable_geom_contacts(ball_geom)
@@ -194,7 +201,8 @@ def connect_node_to_ball(
         type=mujoco.mjtGeom.mjGEOM_CYLINDER,
         fromto=[0.0, 0.0, 0.0, *rod_vector.tolist()],
         size=[ROD_RADIUS],
-        rgba=TRUSS_RGBA,
+        rgba=ROD_RGBA,
+        material=ROD_MATERIAL,
         mass=ROD_MASS,
     )
     disable_geom_contacts(rod_geom)
@@ -322,6 +330,21 @@ def build_world() -> mujoco.MjSpec:
               texrepeat="12 12"
               texuniform="true"
               reflectance="0.12"/>
+    <material name="blue_firehose"
+              rgba="0.0 0.1804 0.3647 1"
+              specular="0.08"
+              shininess="0.12"
+              reflectance="0.01"/>
+    <material name="connector_steel"
+              rgba="0.62 0.64 0.66 1"
+              specular="0.75"
+              shininess="0.65"
+              reflectance="0.22"/>
+    <material name="node_black"
+              rgba="0.18 0.18 0.18 1"
+              specular="0.25"
+              shininess="0.35"
+              reflectance="0.08"/>
   </asset>
   <worldbody>
     <light name="key"

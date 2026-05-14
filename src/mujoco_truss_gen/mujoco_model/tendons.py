@@ -3,7 +3,7 @@ from __future__ import annotations
 import mujoco
 import numpy as np
 
-from mujoco_truss_gen.mujoco_model.constants import TENDON_RGBA
+from mujoco_truss_gen.mujoco_model.constants import TENDON_MATERIAL, TENDON_RGBA
 from mujoco_truss_gen.mujoco_model.model_types import EdgeKey, EdgeTendonMap
 
 
@@ -38,6 +38,7 @@ def add_tendon(spec: mujoco.MjSpec, from_node_name: str, to_node_name: str) -> s
         range=[0.5, 2.0],
         width=0.05,
         rgba=TENDON_RGBA,
+        material=TENDON_MATERIAL,
     )
     tendon.wrap_site(from_node_name)
     tendon.wrap_site(to_node_name)
@@ -51,6 +52,7 @@ def add_route_tendon(spec: mujoco.MjSpec, route_name: str, route: list[str]) -> 
         range=[0.5, 10.0],
         width=0.02,
         rgba=TENDON_RGBA,
+        material=TENDON_MATERIAL,
     )
     for node_name in route:
         tendon.wrap_site(node_name)

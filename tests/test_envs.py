@@ -74,6 +74,38 @@ def test_generated_world_uses_professional_scene_defaults() -> None:
     assert {"key", "fill"} <= light_names
 
 
+def test_generated_spec_uses_firehose_steel_and_black_materials() -> None:
+    root = ET.fromstring(get_mujoco_spec("octahedron", realistic=True).to_xml())
+
+    firehose_material = root.find("./asset/material[@name='blue_firehose']")
+    assert firehose_material is not None
+    assert firehose_material.get("texture") is None
+    assert firehose_material.get("rgba") == "0 0.1804 0.3647 1"
+    assert firehose_material.get("reflectance") == "0.01"
+    assert firehose_material.get("specular") == "0.08"
+
+    for tendon in root.findall(".//tendon/spatial"):
+        if tendon.get("name", "").startswith("Perimeter_Constraint_"):
+            assert tendon.get("material") is None
+            assert tendon.get("width") == "0.0001"
+            assert tendon.get("rgba") == "0 0 0 0"
+        else:
+            assert tendon.get("material") == "blue_firehose"
+
+    rod_geom = next(
+        body.find("./geom")
+        for body in root.findall(".//body")
+        if body.get("name", "").startswith("rod_")
+    )
+    assert rod_geom is not None
+    assert rod_geom.get("material") == "connector_steel"
+
+    node_geom = root.find(".//body[@name='node_1']/geom")
+    assert node_geom is not None
+    assert node_geom.get("material") == "node_black"
+    assert node_geom.get("rgba") == "0.18 0.18 0.18 1"
+
+
 def test_icosahedron_definition_shape() -> None:
     node_dict, triangle_dict = get_icosahedron_definition()
 
