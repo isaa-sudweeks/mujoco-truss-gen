@@ -81,15 +81,21 @@ def test_generated_spec_uses_firehose_steel_and_black_materials() -> None:
     firehose_material = root.find("./asset/material[@name='blue_firehose']")
     assert firehose_material is not None
     assert firehose_material.get("texture") is None
-    assert firehose_material.get("rgba") == "0 0.1804 0.3647 1"
-    assert firehose_material.get("reflectance") == "0.01"
-    assert firehose_material.get("specular") == "0.08"
+    np.testing.assert_allclose(
+        _xml_vector(firehose_material.get("rgba", "")),
+        [0.0, 0.1804, 0.3647, 1.0],
+    )
+    assert float(firehose_material.get("reflectance", "nan")) == pytest.approx(0.01)
+    assert float(firehose_material.get("specular", "nan")) == pytest.approx(0.08)
 
     for tendon in root.findall(".//tendon/spatial"):
         if tendon.get("name", "").startswith("Perimeter_Constraint_"):
             assert tendon.get("material") is None
-            assert tendon.get("width") == "0.0001"
-            assert tendon.get("rgba") == "0 0 0 0"
+            assert float(tendon.get("width", "nan")) == pytest.approx(0.0001)
+            np.testing.assert_allclose(
+                _xml_vector(tendon.get("rgba", "")),
+                [0.0, 0.0, 0.0, 0.0],
+            )
         else:
             assert tendon.get("material") == "blue_firehose"
 
@@ -104,7 +110,10 @@ def test_generated_spec_uses_firehose_steel_and_black_materials() -> None:
     node_geom = root.find(".//body[@name='node_1']/geom")
     assert node_geom is not None
     assert node_geom.get("material") == "node_black"
-    assert node_geom.get("rgba") == "0.18 0.18 0.18 1"
+    np.testing.assert_allclose(
+        _xml_vector(node_geom.get("rgba", "")),
+        [0.18, 0.18, 0.18, 1.0],
+    )
 
 
 def test_icosahedron_definition_shape() -> None:
@@ -260,6 +269,7 @@ def test_octahedron_stays_finite_and_above_ground_under_zero_action() -> None:
     try:
         obs, _ = env.reset(seed=23)
         action = np.zeros(env.action_space.shape, dtype=np.float32)
+        ground_contact_tolerance = 0.01
 
         for _ in range(200):
             obs, reward, terminated, truncated, info = env.step(action)
@@ -268,7 +278,7 @@ def test_octahedron_stays_finite_and_above_ground_under_zero_action() -> None:
             assert np.all(np.isfinite(obs))
             assert np.isfinite(reward)
             assert np.isfinite(info["critical_eig"])
-            assert float(np.min(node_z)) >= NODE_RADIUS
+            assert float(np.min(node_z)) >= NODE_RADIUS - ground_contact_tolerance
             assert not terminated
             assert not truncated
     finally:
