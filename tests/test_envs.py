@@ -19,6 +19,7 @@ from mujoco_truss_gen import (
     get_route_lengths,
     save_xml,
 )
+from mujoco_truss_gen.mujoco_model.constants import NODE_RADIUS
 
 
 def test_generated_spec_runs_in_all_builtin_envs() -> None:
@@ -166,6 +167,110 @@ def test_custom_dictionary_spec_compiles_and_runs() -> None:
         assert isinstance(terminated, bool)
         assert not truncated
         assert "critical_eig" in info
+    finally:
+        env.close()
+
+
+def test_custom_triangle_nodes_are_lifted_above_ground() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, -0.8],
+        "node_2": [0.8, 0.0, -0.4],
+        "node_3": [0.4, 0.7, -0.6],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+    }
+
+    for realistic in (False, True):
+        env = MujocoTrussEnv(
+            TrussEnvConfig(
+                get_mujoco_spec(node_dict, triangle_dict, realistic=realistic),
+                max_steps=1,
+                nsubsteps=1,
+            )
+        )
+        try:
+            for seed in range(5):
+                env.reset(seed=seed)
+                node_z = env.mj_model.get_node_position_matrix()[:, 2]
+                assert float(np.min(node_z)) >= NODE_RADIUS
+        finally:
+            env.close()
+
+
+def test_custom_routed_shape_nodes_are_lifted_above_ground() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, -0.8],
+        "node_2": [0.8, 0.0, -0.4],
+        "node_3": [0.8, 0.8, -0.6],
+        "node_4": [0.0, 0.8, -0.5],
+    }
+    shape_dict = {
+        "quad_1": {
+            "route": ["node_1", "node_2", "node_3", "node_4", "node_1"],
+            "active_edges": [["node_1", "node_2"], ["node_4", "node_1"]],
+        },
+    }
+
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec(node_dict, shape_dict, realistic=False),
+            max_steps=1,
+            nsubsteps=1,
+        )
+    )
+    try:
+        for seed in range(5):
+            env.reset(seed=seed)
+            node_z = env.mj_model.get_node_position_matrix()[:, 2]
+            assert float(np.min(node_z)) >= NODE_RADIUS
+    finally:
+        env.close()
+
+
+def test_builtin_presets_reset_with_nodes_above_ground() -> None:
+    for preset_name in PRESETS:
+        realistic_values = (False, True) if preset_name != "tetrahedron" else (False,)
+        for realistic in realistic_values:
+            env = MujocoTrussEnv(
+                TrussEnvConfig(
+                    get_mujoco_spec(preset_name, realistic=realistic),
+                    max_steps=1,
+                    nsubsteps=1,
+                )
+            )
+            try:
+                for seed in range(10):
+                    env.reset(seed=seed)
+                    node_z = env.mj_model.get_node_position_matrix()[:, 2]
+                    assert float(np.min(node_z)) >= NODE_RADIUS
+            finally:
+                env.close()
+
+
+def test_octahedron_stays_finite_and_above_ground_under_zero_action() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=False),
+            max_steps=250,
+            nsubsteps=1,
+            speed=0.01,
+        )
+    )
+    try:
+        obs, _ = env.reset(seed=23)
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+
+        for _ in range(200):
+            obs, reward, terminated, truncated, info = env.step(action)
+            node_z = env.mj_model.get_node_position_matrix()[:, 2]
+
+            assert np.all(np.isfinite(obs))
+            assert np.isfinite(reward)
+            assert np.isfinite(info["critical_eig"])
+            assert float(np.min(node_z)) >= NODE_RADIUS
+            assert not terminated
+            assert not truncated
     finally:
         env.close()
 

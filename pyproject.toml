@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mujoco-truss-gen"
-version = "0.4.0"
+version = "0.5.0"
 description = "Tools for generating MuJoCo models and Gym-style environments for isoperimetric truss robots."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -55,6 +55,10 @@ dev = [
 test = [
     "pytest>=8.0",
 ]
+mesh = [
+    "matplotlib>=3.7",
+    "trimesh>=4",
+]
 
 [project.scripts]
 mujoco-truss-gen = "mujoco_truss_gen.generate_mujoco_model:main"
@@ -63,6 +67,7 @@ mujoco-truss-gen = "mujoco_truss_gen.generate_mujoco_model:main"
 package-dir = { "" = "src" }
 packages = [
     "mujoco_truss_gen",
+    "mujoco_truss_gen.mesh_import",
     "mujoco_truss_gen.mujoco_model",
 ]
 py-modules = ["generate_mujoco_model"]

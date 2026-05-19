@@ -10,6 +10,7 @@ from mujoco_truss_gen.mujoco_model.bodies import (
     create_node_bodies,
     create_triangle_bodies,
 )
+from mujoco_truss_gen.mujoco_model.constants import MIN_NODE_CENTER_Z
 from mujoco_truss_gen.mujoco_model.constraints import (
     add_perimeter_constraint,
     add_route_length_constraints,
@@ -29,6 +30,13 @@ from mujoco_truss_gen.mujoco_model.tendons import (
     add_tendon,
     edge_key,
 )
+
+STL_SOURCE_METADATA_KEY = "_mujoco_truss_gen_source"
+STL_SOURCE_METADATA_VALUE = "stl"
+TENDON_RANGE_MIN_FACTOR = 0.5
+TENDON_RANGE_MAX_FACTOR = 2.0
+ACTUATOR_RANGE_MIN_FACTOR = 0.0
+ACTUATOR_RANGE_MAX_FACTOR = 3.0
 
 
 def clone_shared_nodes(
@@ -86,7 +94,7 @@ def clone_shared_nodes(
         ball_z = center[2] + scale * (original_position[2] - center[2])
         min_z = min(min_z, float(ball_z))
 
-    z_offset = max(0.0, 0.11 - min_z)
+    z_offset = max(0.0, MIN_NODE_CENTER_Z - min_z)
     if z_offset > 0.0:
         center[2] += z_offset
         for position in original_node_dict.values():
@@ -171,23 +179,50 @@ def build_abstract_shapes(
 
     for shape_name, shape in shape_dict.items():
         route = shape["route"]
+        scale_limits_to_geometry = _is_stl_imported_shape(shape)
         for from_node, to_node in zip(route, route[1:], strict=False):
-            add_edge_tendon(spec, edge_tendons, from_node, to_node)
+            edge_length = _distance_between_nodes(node_dict, from_node, to_node)
+            add_edge_tendon(
+                spec,
+                edge_tendons,
+                from_node,
+                to_node,
+                tendon_range=(
+                    _scaled_tendon_range(edge_length)
+                    if scale_limits_to_geometry
+                    else None
+                ),
+            )
 
         for from_node, to_node in shape["active_edges"]:
             tendon_name = edge_tendons[edge_key(from_node, to_node)]
             if tendon_name in actuated_tendons:
                 continue
+            edge_length = _distance_between_nodes(node_dict, from_node, to_node)
             add_actuator(
                 spec,
                 tendon_name=tendon_name,
                 kp=5000.0,
                 dampratio=1.0,
                 used_names=actuator_names,
+                actrange=(
+                    _scaled_actuator_range(edge_length)
+                    if scale_limits_to_geometry
+                    else None
+                ),
             )
             actuated_tendons.add(tendon_name)
 
-        route_tendons[shape_name] = add_route_tendon(spec, shape_name, route)
+        route_tendons[shape_name] = add_route_tendon(
+            spec,
+            shape_name,
+            route,
+            tendon_range=(
+                _scaled_tendon_range(_route_length(node_dict, route))
+                if scale_limits_to_geometry
+                else None
+            ),
+        )
 
     add_route_length_constraints(
         spec,
@@ -224,6 +259,7 @@ def build_triangle(
             realistic=True,
         )
     else:
+        _lift_nodes_above_ground(node_dict)
         create_node_bodies(spec, node_dict)
         build_abstract_triangle(spec, triangle_dict)
         return
@@ -245,6 +281,7 @@ def build_shapes(
 
     _validate_node_dict(node_dict)
     node_dict = _copy_node_dict(node_dict)
+    _lift_nodes_above_ground(node_dict)
     build_abstract_shapes(spec, node_dict, shape_dict)
 
 
@@ -271,6 +308,51 @@ def _copy_shape_dict(shape_dict: ShapeDict) -> ShapeDict:
             else:
                 copied[name][key] = value
     return copied
+
+
+def _lift_nodes_above_ground(node_dict: NodeDict) -> None:
+    min_z = min(float(position[2]) for position in node_dict.values())
+    z_offset = max(0.0, MIN_NODE_CENTER_Z - min_z)
+    if z_offset == 0.0:
+        return
+
+    for position in node_dict.values():
+        position[2] = float(position[2]) + z_offset
+
+
+def _is_stl_imported_shape(shape: dict[str, Any]) -> bool:
+    return shape.get(STL_SOURCE_METADATA_KEY) == STL_SOURCE_METADATA_VALUE
+
+
+def _distance_between_nodes(node_dict: NodeDict, from_node: str, to_node: str) -> float:
+    from_position = np.array(node_dict[from_node], dtype=float)
+    to_position = np.array(node_dict[to_node], dtype=float)
+    return float(np.linalg.norm(to_position - from_position))
+
+
+def _route_length(node_dict: NodeDict, route: list[str]) -> float:
+    return sum(
+        _distance_between_nodes(node_dict, from_node, to_node)
+        for from_node, to_node in zip(route, route[1:], strict=False)
+    )
+
+
+def _scaled_tendon_range(length: float) -> list[float]:
+    if length <= 0.0:
+        raise ValueError("Cannot scale tendon limits for a zero-length STL route edge.")
+    return [
+        length * TENDON_RANGE_MIN_FACTOR,
+        length * TENDON_RANGE_MAX_FACTOR,
+    ]
+
+
+def _scaled_actuator_range(length: float) -> list[float]:
+    if length <= 0.0:
+        raise ValueError("Cannot scale actuator limits for a zero-length STL route edge.")
+    return [
+        length * ACTUATOR_RANGE_MIN_FACTOR,
+        length * ACTUATOR_RANGE_MAX_FACTOR,
+    ]
 
 
 def _validate_node_dict(node_dict: NodeDict) -> None:

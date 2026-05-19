@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 NODE_RADIUS = 0.1
+MIN_NODE_CENTER_Z = NODE_RADIUS + 0.05
 NODE_MASS = 0.1
 CONNECTOR_RADIUS = 0.05
 CONNECTOR_MASS = 0.05
