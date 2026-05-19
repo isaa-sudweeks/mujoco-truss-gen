@@ -86,6 +86,7 @@ class MujocoModel:
         mujoco.mj_forward(self.model, self.data)
         initialize_actuator_lengths(self.model, self.data)
         self.init_act = self.data.act.copy()
+        self.wcrm = False
         self.initial_critical_eig = max(self._critical_eig(), 1e-8)
 
     def _load_model_metadata_from_xml(self, xml: str) -> None:
@@ -175,6 +176,9 @@ class MujocoModel:
         if not self.active_axes:
             self.active_axes = ("x", "z")
         self.axis_indices = tuple("xyz".index(axis) for axis in self.active_axes)
+
+    def set_wcrm(self, wcrm: bool) -> None:
+        self.wcrm = wcrm
 
     def _structural_edges_from_xml(self, root: ET.Element) -> list[tuple[str, str]]:
         structural_tendon_names = set()
@@ -333,13 +337,17 @@ class MujocoModel:
         if rigidity_matrix.size == 0:
             return 0.0
 
+        if self.wcrm:
+            norm = np.linalg.trace(rigidity_matrix.T @ rigidity_matrix)
+        else:
+            norm = 1.0
         eigvals = np.linalg.eigvalsh(rigidity_matrix.T @ rigidity_matrix)
         eigvals = np.sort(np.real(eigvals))
         dims = len(self.active_axes)
         rigid_body_modes = dims + (dims * (dims - 1)) // 2
         if eigvals.size <= rigid_body_modes:
             return 0.0
-        return float(max(eigvals[rigid_body_modes], 0.0))
+        return float(max(eigvals[rigid_body_modes] / norm, 0.0))
 
     def collapse_check(self) -> float:
         return self._critical_eig() / self.initial_critical_eig

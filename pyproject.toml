@@ -55,6 +55,10 @@ dev = [
 test = [
     "pytest>=8.0",
 ]
+mesh = [
+    "matplotlib>=3.7",
+    "trimesh>=4",
+]
 
 [project.scripts]
 mujoco-truss-gen = "mujoco_truss_gen.generate_mujoco_model:main"
@@ -63,6 +67,7 @@ mujoco-truss-gen = "mujoco_truss_gen.generate_mujoco_model:main"
 package-dir = { "" = "src" }
 packages = [
     "mujoco_truss_gen",
+    "mujoco_truss_gen.mesh_import",
     "mujoco_truss_gen.mujoco_model",
 ]
 py-modules = ["generate_mujoco_model"]

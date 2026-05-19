@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from mujoco_truss_gen.base_env import MujocoTrussEnv, TrussEnvConfig
+from mujoco_truss_gen.mesh_import import stl_to_shape_dict
 from mujoco_truss_gen.mujoco_model import (
     PRESETS,
     build_abstract_shapes,
@@ -42,5 +43,6 @@ __all__ = [
     "get_preset_definition",
     "get_route_lengths",
     "save_xml",
+    "stl_to_shape_dict",
     "view",
 ]
