@@ -18,6 +18,18 @@ def _install_fake_trimesh(monkeypatch: pytest.MonkeyPatch, mesh: object) -> None
     monkeypatch.setitem(sys.modules, "trimesh", fake_trimesh)
 
 
+def _xml_float_pair(
+    root: ET.Element,
+    path: str,
+    attribute: str = "range",
+) -> list[float]:
+    element = root.find(path)
+    assert element is not None
+    value = element.get(attribute)
+    assert value is not None
+    return [float(part) for part in value.split()]
+
+
 def test_stl_to_shape_dict_returns_routed_shape_dict(monkeypatch: pytest.MonkeyPatch) -> None:
     mesh = SimpleNamespace(
         vertices=np.array(
@@ -77,6 +89,63 @@ def test_hand_authored_routed_shape_keeps_route_length_constraint() -> None:
     root = ET.fromstring(get_mujoco_spec(node_dict, shape_dict, realistic=False).to_xml())
 
     assert root.find(".//equality/tendon[@name='Route_Length_Constraint_quad_1']") is not None
+
+
+def test_stl_import_scales_tendon_limits_to_imported_edge_lengths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mesh = SimpleNamespace(
+        vertices=np.array(
+            [
+                [0.0, 0.0, 0.1],
+                [4.0, 0.0, 0.1],
+                [0.0, 3.0, 0.1],
+            ]
+        ),
+        faces=np.array([[0, 1, 2]]),
+    )
+    _install_fake_trimesh(monkeypatch, mesh)
+
+    node_dict, shape_dict = stl_to_shape_dict("scaled_triangle.stl")
+    root = ET.fromstring(get_mujoco_spec(node_dict, shape_dict, realistic=False).to_xml())
+
+    assert _xml_float_pair(root, ".//tendon/spatial[@name='tendon_node_1_node_2']") == [2.0, 8.0]
+    assert _xml_float_pair(root, ".//tendon/spatial[@name='tendon_node_3_node_1']") == [1.5, 6.0]
+    assert _xml_float_pair(root, ".//tendon/spatial[@name='tendon_node_2_node_3']") == [2.5, 10.0]
+    assert _xml_float_pair(root, ".//tendon/spatial[@name='route_path_1']") == [6.0, 24.0]
+
+    assert _xml_float_pair(root, ".//actuator/general[@name='act_12']", "actrange") == [
+        0.0,
+        12.0,
+    ]
+    assert _xml_float_pair(root, ".//actuator/general[@name='act_13']", "actrange") == [
+        0.0,
+        9.0,
+    ]
+    assert _xml_float_pair(root, ".//actuator/general[@name='act_23']", "actrange") == [
+        0.0,
+        15.0,
+    ]
+
+
+def test_hand_authored_routed_shape_keeps_default_tendon_limits() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [4.0, 0.0, 0.2],
+        "node_3": [0.0, 3.0, 0.2],
+    }
+    shape_dict = {
+        "path_1": {
+            "route": ["node_1", "node_2", "node_3"],
+            "active_edges": [["node_1", "node_2"]],
+        },
+    }
+
+    root = ET.fromstring(get_mujoco_spec(node_dict, shape_dict, realistic=False).to_xml())
+
+    assert _xml_float_pair(root, ".//tendon/spatial[@name='tendon_node_1_node_2']") == [0.5, 2.0]
+    assert _xml_float_pair(root, ".//tendon/spatial[@name='route_path_1']") == [0.5, 10.0]
+    assert _xml_float_pair(root, ".//actuator/general[@name='act_12']", "actrange") == [0.0, 3.0]
 
 
 def test_stl_to_shape_dict_reports_progress(monkeypatch: pytest.MonkeyPatch) -> None:

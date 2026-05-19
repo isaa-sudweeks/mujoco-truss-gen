@@ -15,6 +15,9 @@ import numpy as np
 
 from mujoco_truss_gen.mujoco_model.model_types import NodeDict, ShapeDict
 
+_STL_SOURCE_METADATA_KEY = "_mujoco_truss_gen_source"
+_STL_SOURCE_METADATA_VALUE = "stl"
+
 
 def stl_to_shape_dict(
     filename: str | Path,
@@ -526,6 +529,7 @@ def _shape_dict_from_edges(
                 "route": route,
                 "active_edges": active_edges,
                 "disable_route_length_constraint": True,
+                _STL_SOURCE_METADATA_KEY: _STL_SOURCE_METADATA_VALUE,
             }
             path_index += 1
 

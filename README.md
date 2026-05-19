@@ -39,14 +39,16 @@ Known limitations:
 - The human viewer requires a Python environment where `mujoco.viewer` is
   available.
 - It is only possible to create custom trusses that are made up of independent
-  triangles. Right now it is not possible to create a truss structure that
-  includes triangles that share edges.
+  triangles, or of truss strucutes made of euler paths.
+- Right now the Euler paths are restricted to paths with a maximum of 4 nodes. In order to do more than this I think we need to change our abtraction to a completely python driven system where node actions are selected and the then the environment picks the corresponding edge actions. 
+- The STL -> MuJoCo path is still very unstable because it results in configurations that are not stable, so it is still very experimental. 
 
 
 Future work:
 
 - Generate a valid MuJoCo model for a continuous tube structure without manually
-  defining every active edge.
+  defining every active edge. The way that we can do it is to add another layer of abstraction that effectivly allows us to send node commands and then the edge commands are solved for.
+- Try to make it so that imported STL files have some sort of process through which we can say that they will be stable
 - Add rigid elements between sets of nodes to support structures such as the
   Treg Rover.
 - Explore importing a STEP file and generating a feasible truss approximation.

@@ -31,11 +31,17 @@ def _node_suffix_sort_key(node_suffix: str) -> tuple[int, int | str]:
     return (1, node_suffix)
 
 
-def add_tendon(spec: mujoco.MjSpec, from_node_name: str, to_node_name: str) -> str:
+def add_tendon(
+    spec: mujoco.MjSpec,
+    from_node_name: str,
+    to_node_name: str,
+    *,
+    tendon_range: list[float] | tuple[float, float] | None = None,
+) -> str:
     tendon_name = f"tendon_{from_node_name}_{to_node_name}"
     tendon = spec.add_tendon(
         name=tendon_name,
-        range=[0.5, 2.0],
+        range=tendon_range if tendon_range is not None else [0.5, 2.0],
         width=0.05,
         rgba=TENDON_RGBA,
         material=TENDON_MATERIAL,
@@ -45,11 +51,17 @@ def add_tendon(spec: mujoco.MjSpec, from_node_name: str, to_node_name: str) -> s
     return tendon_name
 
 
-def add_route_tendon(spec: mujoco.MjSpec, route_name: str, route: list[str]) -> str:
+def add_route_tendon(
+    spec: mujoco.MjSpec,
+    route_name: str,
+    route: list[str],
+    *,
+    tendon_range: list[float] | tuple[float, float] | None = None,
+) -> str:
     tendon_name = f"route_{route_name}"
     tendon = spec.add_tendon(
         name=tendon_name,
-        range=[0.5, 10.0],
+        range=tendon_range if tendon_range is not None else [0.5, 10.0],
         width=0.02,
         rgba=TENDON_RGBA,
         material=TENDON_MATERIAL,
@@ -64,10 +76,17 @@ def add_edge_tendon(
     edge_tendons: EdgeTendonMap,
     from_node_name: str,
     to_node_name: str,
+    *,
+    tendon_range: list[float] | tuple[float, float] | None = None,
 ) -> str:
     key = edge_key(from_node_name, to_node_name)
     if key not in edge_tendons:
-        edge_tendons[key] = add_tendon(spec, from_node_name, to_node_name)
+        edge_tendons[key] = add_tendon(
+            spec,
+            from_node_name,
+            to_node_name,
+            tendon_range=tendon_range,
+        )
     return edge_tendons[key]
 
 
@@ -88,6 +107,8 @@ def add_actuator(
     kp: float,
     dampratio: float,
     used_names: set[str] | None = None,
+    *,
+    actrange: list[float] | tuple[float, float] | None = None,
 ) -> None:
     actuator_name = unique_actuator_name(tendon_name, used_names)
     actuator = spec.add_actuator(
@@ -97,7 +118,7 @@ def add_actuator(
         ctrllimited=True,
         ctrlrange=[-0.05, 0.05],
         actlimited=True,
-        actrange=[0.0, 3.0],
+        actrange=actrange if actrange is not None else [0.0, 3.0],
     )
     if used_names is not None:
         used_names.add(actuator_name)
