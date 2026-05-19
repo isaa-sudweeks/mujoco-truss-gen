@@ -246,6 +246,7 @@ class MujocoModel:
     def reset(self, rng: np.random.Generator | None = None) -> None:
         rng = rng or np.random.default_rng()
         self.data.qpos[:] = self.init_qpos + rng.uniform(-0.005, 0.005, size=self.model.nq)
+        mujoco.mj_normalizeQuat(self.model, self.data.qpos)
         self.data.qvel[:] = self.init_qvel + rng.uniform(-0.005, 0.005, size=self.model.nv)
         self.data.ctrl[:] = self.ctrl_home.copy()
         if self.model.na:

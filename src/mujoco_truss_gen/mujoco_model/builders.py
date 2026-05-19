@@ -10,6 +10,7 @@ from mujoco_truss_gen.mujoco_model.bodies import (
     create_node_bodies,
     create_triangle_bodies,
 )
+from mujoco_truss_gen.mujoco_model.constants import MIN_NODE_CENTER_Z
 from mujoco_truss_gen.mujoco_model.constraints import (
     add_perimeter_constraint,
     add_route_length_constraints,
@@ -86,7 +87,7 @@ def clone_shared_nodes(
         ball_z = center[2] + scale * (original_position[2] - center[2])
         min_z = min(min_z, float(ball_z))
 
-    z_offset = max(0.0, 0.11 - min_z)
+    z_offset = max(0.0, MIN_NODE_CENTER_Z - min_z)
     if z_offset > 0.0:
         center[2] += z_offset
         for position in original_node_dict.values():
@@ -224,6 +225,7 @@ def build_triangle(
             realistic=True,
         )
     else:
+        _lift_nodes_above_ground(node_dict)
         create_node_bodies(spec, node_dict)
         build_abstract_triangle(spec, triangle_dict)
         return
@@ -245,6 +247,7 @@ def build_shapes(
 
     _validate_node_dict(node_dict)
     node_dict = _copy_node_dict(node_dict)
+    _lift_nodes_above_ground(node_dict)
     build_abstract_shapes(spec, node_dict, shape_dict)
 
 
@@ -271,6 +274,16 @@ def _copy_shape_dict(shape_dict: ShapeDict) -> ShapeDict:
             else:
                 copied[name][key] = value
     return copied
+
+
+def _lift_nodes_above_ground(node_dict: NodeDict) -> None:
+    min_z = min(float(position[2]) for position in node_dict.values())
+    z_offset = max(0.0, MIN_NODE_CENTER_Z - min_z)
+    if z_offset == 0.0:
+        return
+
+    for position in node_dict.values():
+        position[2] = float(position[2]) + z_offset
 
 
 def _validate_node_dict(node_dict: NodeDict) -> None:

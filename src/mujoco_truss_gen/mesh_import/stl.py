@@ -525,6 +525,7 @@ def _shape_dict_from_edges(
             shape_dict[f"path_{path_index}"] = {
                 "route": route,
                 "active_edges": active_edges,
+                "disable_route_length_constraint": True,
             }
             path_index += 1
 

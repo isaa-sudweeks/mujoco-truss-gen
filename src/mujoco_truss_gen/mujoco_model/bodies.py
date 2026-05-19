@@ -104,7 +104,6 @@ def _face_normal_quat(connector_direction: Vector) -> list[float]:
 
 def add_free_node_body(spec: mujoco.MjSpec, node_name: str, position: Vector) -> Any:
     node_body = spec.worldbody.add_body(name=node_name, pos=position)
-    node_body.gravcomp = 1.0
     node_body.add_freejoint()
     node_body.add_site(name=node_name)
     node_geom = node_body.add_geom(
@@ -256,6 +255,7 @@ def create_triangle_bodies(
             name=f"tri_{triangle_name}", pos=positions[0].tolist()
         )
         triangle_body.quat = quaternion
+        triangle_body.gravcomp = 1.0
         triangle_body.explicitinertial = True
         triangle_body.mass = TRIANGLE_BODY_MASS
         triangle_body.inertia = [TRIANGLE_BODY_MASS] * 3

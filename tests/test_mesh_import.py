@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import xml.etree.ElementTree as ET
 from io import StringIO
 from types import SimpleNamespace
 from typing import Any
@@ -53,7 +54,29 @@ def test_stl_to_shape_dict_returns_routed_shape_dict(monkeypatch: pytest.MonkeyP
             active_edges.add(tuple(edge))
 
     assert active_edges == route_edges
-    get_mujoco_spec(node_dict, shape_dict, realistic=False).compile()
+    spec = get_mujoco_spec(node_dict, shape_dict, realistic=False)
+    root = ET.fromstring(spec.to_xml())
+    assert root.find(".//equality/tendon[@name='Route_Length_Constraint_path_1']") is None
+    spec.compile()
+
+
+def test_hand_authored_routed_shape_keeps_route_length_constraint() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.8, 0.8, 0.2],
+        "node_4": [0.0, 0.8, 0.2],
+    }
+    shape_dict = {
+        "quad_1": {
+            "route": ["node_1", "node_2", "node_3", "node_4", "node_1"],
+            "active_edges": [["node_1", "node_2"], ["node_4", "node_1"]],
+        },
+    }
+
+    root = ET.fromstring(get_mujoco_spec(node_dict, shape_dict, realistic=False).to_xml())
+
+    assert root.find(".//equality/tendon[@name='Route_Length_Constraint_quad_1']") is not None
 
 
 def test_stl_to_shape_dict_reports_progress(monkeypatch: pytest.MonkeyPatch) -> None:

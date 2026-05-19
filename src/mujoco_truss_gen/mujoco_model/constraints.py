@@ -69,7 +69,9 @@ def add_route_length_constraints(
     shape_dict: ShapeDict,
     route_tendons: dict[str, str],
 ) -> None:
-    for shape_name in shape_dict:
+    for shape_name, shape in shape_dict.items():
+        if shape.get("disable_route_length_constraint", False):
+            continue
         tendon_name = route_tendons[shape_name]
         constraint = spec.add_equality(
             name=f"Route_Length_Constraint_{shape_name}",
