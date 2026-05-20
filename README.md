@@ -8,50 +8,22 @@ who need a shared, installable source of MuJoCo robot models instead of copying
 model-generation code between reinforcement learning, planning, simulation, and
 optimization projects.
 
-## Project Status
+## Status
 
 This repository is an internal lab prototype. It has a working installable
-package, a small public API, built-in polyhedron presets, and tests that verify
+package, built-in structure presets, a small public API, and tests that verify
 basic model generation and environment stepping. The API may still change before
 the package is treated as stable research infrastructure.
 
-Current scope:
+Supported workflows include:
 
 - Generate MuJoCo `MjSpec` models for triangle-based truss structures.
-- Generate built-in octahedron and icosahedron robot presets.
-- Build either an abstract per-node slide-joint model or a more realistic
-  triangle-body model with connector balls, rods, and face-aligned shared-node
-  connectors.
-- Add tendon actuators and perimeter constraints.
+- Use built-in `"octahedron"`, `"icosahedron"`, `"solar_array"`, and
+  `"tetrahedron"` presets.
+- Build abstract slide-joint models or realistic triangle-body models.
 - Save generated MuJoCo XML.
 - Wrap generated models in Gymnasium-compatible environments.
-- Provide base, relative-observation, and velocity-command environment variants.
-
-Known limitations:
-
-- The named preset registry is intentionally small. Current presets are
-  `"octahedron"`, `"icosahedron"`, `"solar_array"`, and `"tetrahedron"`.
-- Custom robot definitions are supported through dictionaries.
-- The default rewards are research defaults, not task-independent objectives.
-- The environment classes are starting points. Most RL, planning, or
-  optimization tasks should subclass or wrap them for task-specific observations,
-  rewards, resets, and termination logic.
-- The human viewer requires a Python environment where `mujoco.viewer` is
-  available.
-- It is only possible to create custom trusses that are made up of independent
-  triangles, or of truss strucutes made of euler paths.
-- Right now the Euler paths are restricted to paths with a maximum of 4 nodes. In order to do more than this I think we need to change our abtraction to a completely python driven system where node actions are selected and the then the environment picks the corresponding edge actions. 
-- The STL -> MuJoCo path is still very unstable because it results in configurations that are not stable, so it is still very experimental. 
-
-
-Future work:
-
-- Generate a valid MuJoCo model for a continuous tube structure without manually
-  defining every active edge. The way that we can do it is to add another layer of abstraction that effectivly allows us to send node commands and then the edge commands are solved for.
-- Try to make it so that imported STL files have some sort of process through which we can say that they will be stable
-- Add rigid elements between sets of nodes to support structures such as the
-  Treg Rover.
-- Explore importing a STEP file and generating a feasible truss approximation.
+- Convert STL meshes into experimental routed-tube shape dictionaries.
 
 ## Installation
 
@@ -59,12 +31,6 @@ After a release has been published to PyPI:
 
 ```bash
 python -m pip install mujoco-truss-gen
-```
-
-To upgrade to the newest published version:
-
-```bash
-python -m pip install --upgrade mujoco-truss-gen
 ```
 
 For local development from a clone:
@@ -77,9 +43,6 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
-On systems where `python` is not available, use `python3` for the commands in
-this README.
-
 The package requires Python 3.10 or newer and installs these runtime
 dependencies:
 
@@ -87,66 +50,6 @@ dependencies:
 - `mujoco`
 - `numpy`
 - `scipy`
-
-## Publishing Releases
-
-PyPI publishing is automated through the GitHub Actions workflow in
-`.github/workflows/publish.yml`. The workflow runs when a GitHub Release is
-published, and it can also be started manually from the GitHub Actions tab.
-
-The workflow:
-For small test releases, you can use a pre-release tag (e.g., `0.1.0a1`).
-
-For bug fixes or backwards-compatible changes, you can use a patch release tag (e.g., `0.1.1`).
-
-For new features or breaking changes, you can use a minor or major release tag (e.g., `0.2.0` or `1.0.0`).
-
-- Installs the package test dependencies.
-- Runs `python -m pytest`.
-- Builds the source distribution and wheel with `python -m build`.
-- Checks the built distributions with `python -m twine check dist/*`.
-- Publishes the distributions to PyPI.
-
-The publish job uses PyPI Trusted Publishing, so the repository does not need a
-long-lived PyPI API token in GitHub Secrets. PyPI must be configured to trust
-this GitHub Actions workflow before the first automated release. For the
-existing `mujoco-truss-gen` PyPI project, add a GitHub Actions trusted publisher
-with these settings:
-
-- PyPI project name: `mujoco-truss-gen`
-- GitHub repository owner: `isaa-sudweeks`
-- GitHub repository name: `mujoco-truss-gen`
-- Workflow filename: `publish.yml`
-- GitHub environment name: `pypi`
-
-To publish a new version:
-
-1. Update `version` in `pyproject.toml`.
-2. Commit and push the change.
-3. Create and publish a GitHub Release for that commit.
-4. Confirm the `Publish to PyPI` workflow passes.
-
-PyPI versions are immutable. If a release workflow fails after uploading a
-version, fix the issue, bump `version` again, and publish a new release.
-
-## Publishing Releases Manually
-
-Release checklist:
-
-1. Update `version` in `pyproject.toml`.
-2. Run `python -m pytest`.
-3. Run `python -m ruff check .`.
-4. Run `python -m ruff format --check .`.
-5. Build distributions with `python -m build`.
-6. Upload with `python -m twine upload dist/*`.
-7. Verify installation in a clean environment with
-   `python -m pip install mujoco-truss-gen`.
-
-Users update to the newest published package with:
-
-```bash
-python -m pip install --upgrade mujoco-truss-gen
-```
 
 ## Quick Start
 
@@ -159,7 +62,7 @@ spec = get_mujoco_spec("octahedron", realistic=False)
 model = spec.compile()
 ```
 
-Save the generated XML:
+Save generated XML:
 
 ```python
 from mujoco_truss_gen import get_mujoco_spec, save_xml
@@ -167,10 +70,6 @@ from mujoco_truss_gen import get_mujoco_spec, save_xml
 spec = get_mujoco_spec("octahedron", realistic=False)
 xml_path = save_xml(spec, "octahedron.xml")
 ```
-
-Relative output paths are resolved from the current working directory. The
-example above writes `octahedron.xml` into the directory where the script is
-run.
 
 Run one Gymnasium step:
 
@@ -195,385 +94,36 @@ obs, reward, terminated, truncated, info = env.step(action)
 env.close()
 ```
 
-View a generated model programmatically using the passive viewer:
-
-```python
-from mujoco_truss_gen import get_mujoco_spec, view
-
-spec = get_mujoco_spec("octahedron", realistic=False)
-view(spec)
-```
-
-> [!NOTE]
-> On macOS, `mujoco.viewer.launch_passive` requires the script to be run with `mjpython` instead of the standard `python` executable:
-> ```bash
-> mjpython your_script.py
-> ```
-
-Alternatively, open the built-in octahedron model from the command line:
+Open the built-in octahedron model from the command line:
 
 ```bash
 python -m mujoco_truss_gen.generate_mujoco_model
 ```
 
-You can also start from the included custom-truss example:
+On macOS, MuJoCo's passive viewer may require running viewer scripts with
+`mjpython` instead of the standard `python` executable.
+
+## Documentation
+
+- [Model generation](docs/model-generation.md): custom trusses, routed shape
+  dictionaries, model modes, and generation helper contracts.
+- [Environments](docs/environments.md): environment constructors, actions,
+  observations, rewards, rendering, and `TrussEnvConfig`.
+- [STL import](docs/stl-import.md): optional STL-to-routed-tube conversion and
+  preview behavior.
+- [GNN utilities](docs/gnn-utilities.md): extracting graph features and edge
+  indices for PyTorch Geometric workflows.
+- [Development](docs/development.md): local setup, tests, linting, formatting,
+  and package builds.
+- [Releasing](docs/releasing.md): automated and manual PyPI release steps.
+- [Roadmap](docs/roadmap.md): known limitations and planned work.
+
+## Example
+
+Start from the included custom-truss example:
 
 ```bash
 python examples/custom_truss.py
-```
-
-## Defining a Custom Truss
-
-Custom trusses are represented with two dictionaries.
-
-`node_dict` maps node names to 3D positions:
-
-```python
-node_dict = {
-    "node_1": [0.0, 0.0, 0.2],
-    "node_2": [0.8, 0.0, 0.2],
-    "node_3": [0.4, 0.7, 0.2],
-}
-```
-
-`triangle_dict` maps triangle names to four node names:
-
-```python
-triangle_dict = {
-    "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
-}
-```
-
-The first three names are the triangle vertices. The fourth name is the passive
-node for that triangle's perimeter constraint and must be one of the first three
-vertex names.
-
-Build a model from those dictionaries:
-
-```python
-from mujoco_truss_gen import get_mujoco_spec
-
-spec = get_mujoco_spec(node_dict, triangle_dict, realistic=False)
-model = spec.compile()
-```
-
-Continuous tube shapes can also be represented with a shape dictionary. Each
-shape defines a routed path and the route edges that should be actuated:
-
-```python
-    node_dict = {
-        "node_1": [0.0, 0.0, 0.1],
-        "node_2": [1.0, 0.0, 0.1],
-        "node_3": [0.5, 0.8660, 0.1],
-        "node_4": [0.5, np.sqrt(3) / 6, 0.1 + np.sqrt(2 / 3)],
-    }
-    shape_dict = {
-        "path_1": {
-            "route": ["node_1", "node_2", "node_4", "node_3"],
-            "active_edges": [
-                ["node_1", "node_2"],
-                ["node_4", "node_3"],
-            ],
-        },
-        "path_2": {
-            "route": ["node_2", "node_3", "node_1", "node_4"],
-            "active_edges": [
-                ["node_2", "node_3"],
-                ["node_1", "node_4"],
-            ],
-        },
-    }
-
-spec = get_mujoco_spec(node_dict, shape_dict, realistic=False)
-model = spec.compile()
-```
-
-The route creates one edge tendon for each adjacent node pair in the path.
-Active edges receive actuators. A route-length equality constraint keeps the
-total routed length constant, so non-actuated passive edges absorb length
-changes caused by the active edges. Routed shape dictionaries currently support
-`realistic=False`.
-
-## Importing STL Meshes as Routed Tubes
-
-STL mesh import is available through the optional `mesh` dependency group:
-
-```bash
-python -m pip install "mujoco-truss-gen[mesh]"
-```
-
-The importer treats the STL as a routing graph. Mesh faces are used only to
-derive deduplicated graph edges; each generated route becomes one continuous
-tube in the existing `shape_dict` format.
-
-```python
-from mujoco_truss_gen import get_mujoco_spec, stl_to_shape_dict
-
-node_dict, shape_dict = stl_to_shape_dict(
-    "part.stl",
-    merge_tolerance=1e-6,
-    target_edge_length=0.05,
-    preview=True,
-)
-spec = get_mujoco_spec(node_dict, shape_dict, realistic=False)
-model = spec.compile()
-```
-
-Coordinates are interpreted as MuJoCo units by default. Use `scale` and
-`offset` to convert STL units or move the imported graph. Pass either
-`target_edge_length` or `target_node_count` to simplify the graph after nearby
-vertices are merged. The importer prints progress by default, including mesh
-size, graph size, route count, and elapsed time for each stage. Pass
-`verbose=False` to silence that output.
-
-Pass `preview=True` to open a matplotlib preview before converting the routed
-graph to MuJoCo. The preview shows the merged STL graph next to the simplified
-routed paths and reports node, edge, and path counts so you can check how much
-simplification was applied. Preview windows are disabled by default; pass
-`preview=False` explicitly in scripts where you want to guarantee headless
-operation. For non-blocking previews, pass `preview_block=False`. On macOS, the
-preview is launched in a separate Python process so matplotlib can own its GUI
-window on the main thread, including when the caller is running under
-`mjpython`.
-
-`get_mujoco_spec()` and `build_triangle()` treat caller-provided dictionaries as
-read-only inputs. The realistic builder clones shared nodes internally, but it
-does not mutate the original `node_dict` or `triangle_dict` passed by the caller.
-In realistic mode, each triangle gets its own node-body instances. Vertices that
-were shared in the input are tied back together through connector balls, and the
-generated node boxes are rotated so their local face normal points toward the
-connector rod.
-
-## Graph Neural Network (GNN) Utilities
-
-You can extract node features and edge indices directly from a spec or model, formatted specifically for use with PyTorch Geometric (`torch_geometric.data.Data`):
-
-```python
-import torch
-from mujoco_truss_gen import get_mujoco_spec, get_edge_index, get_node_features
-
-spec = get_mujoco_spec("octahedron", realistic=False)
-
-# Get edge indices in PyG COO format: shape (2, num_directed_edges)
-edge_index = get_edge_index(spec)
-
-# Get node features (position and velocity): shape (num_nodes, 6)
-node_features = get_node_features(spec)
-
-# Convert to PyTorch tensors
-edge_index_tensor = torch.from_numpy(edge_index)
-x_tensor = torch.from_numpy(node_features)
-```
-
-For realistic models, pass `graph_view="logical"` to collapse cloned triangle
-nodes back to the abstract logical graph:
-
-```python
-spec = get_mujoco_spec("octahedron", realistic=True)
-
-edge_index = get_edge_index(spec, graph_view="logical")
-node_features = get_node_features(
-    spec,
-    graph_view="logical",
-    aggregation="connector_ball",  # or "mean"
-)
-```
-
-## Model Generation Contract
-
-Public generation helpers:
-
-- `build_world()` creates a base `mujoco.MjSpec` containing a checker-textured
-  ground plane, bright skybox, and key/fill lighting.
-- `build_triangle(spec, node_dict, triangle_dict, realistic=False)` adds truss
-  bodies, sites, tendons, actuators, and perimeter constraints to an existing
-  spec.
-- `build_shapes(spec, node_dict, shape_dict, realistic=False)` adds routed
-  continuous-tube shapes with per-edge tendons and route-length constraints.
-- `get_mujoco_spec("octahedron", realistic=False)` and the other names in
-  `PRESETS` build built-in presets.
-- `get_mujoco_spec(node_dict, triangle_dict, realistic=False)` builds a custom
-  dictionary-defined truss.
-- `get_mujoco_spec(node_dict, shape_dict, realistic=False)` builds a routed
-  continuous-tube shape model.
-- `get_octahedron_definition()` returns fresh node and triangle dictionaries for
-  the built-in preset.
-- `get_icosahedron_definition()` returns fresh node and triangle dictionaries
-  for the built-in preset.
-- `get_perimeter(node_dict, triangle_dict)` computes each triangle perimeter
-  from the first three vertices.
-- `get_edge_index(source)` extracts structural connectivity into a PyTorch Geometric compatible `(2, E)` numpy array.
-- `get_node_features(source)` extracts node positions and velocities into a PyTorch Geometric compatible `(N, 6)` numpy array.
-- `stl_to_shape_dict(filename, ...)` imports an STL mesh as routed tube
-  dictionaries when the optional `mesh` dependencies are installed.
-- `save_xml(spec, filename)` writes `spec.to_xml()` to disk and returns the
-  resolved path.
-- `view(spec)` compiles and opens the generated model in MuJoCo's passive
-  viewer.
-
-Input expectations:
-
-- Node names should be unique strings. Names beginning with `node_` are required
-  for the built-in metadata and environment helpers.
-- Node positions must be 3D numeric sequences.
-- Triangle entries must contain exactly the three vertex nodes plus one passive
-  node.
-- The passive node must appear in that triangle's first three vertices.
-- Custom triangle definitions are validated before MuJoCo objects are created,
-  and validation errors name the node, triangle, or shape entry that needs to be
-  fixed.
-- Shape entries must contain `route` and `active_edges` keys.
-- Shape routes must contain at least two node names. Each active edge must be an
-  adjacent pair in the route.
-- The builder helpers should be used when environment rigidity and slip helpers
-  are needed, because those helpers infer structure from generated body, site,
-  tendon, and actuator names.
-
-Model modes:
-
-- `realistic=False` creates one world-body per node with slide joints on `x`,
-  `y`, and `z`. This is the simpler abstract model and is useful for fast
-  algorithm development.
-- `realistic=True` creates one free triangle body per triangle, clones shared
-  triangle nodes inside the generated model, and connects shared vertices through
-  connector balls. Shared-node boxes are face-aligned toward their connector rod,
-  so the visible box face and rod direction represent the intended module
-  connection geometry. This is intended to better represent the triangle-module
-  structure.
-
-## Environment Contract
-
-The environment constructors accept any of these model sources:
-
-- `mujoco.MjSpec`
-- `mujoco.MjModel`
-- XML string
-- path to an XML file
-- `TrussEnvConfig`
-
-Available environments:
-
-- `MujocoTrussEnv`: base environment with tendon lengths, tendon velocities,
-  center-of-mass position, and center-of-mass velocity in the observation.
-- `MujocoRelativeObsEnv`: relative node-position observations and normalized
-  actuator delta actions.
-- `MujocoVelocityCommandEnv`: relative observations with direct velocity command
-  actions.
-
-Shared configuration is provided by `TrussEnvConfig`:
-
-```python
-from mujoco_truss_gen import TrussEnvConfig
-
-config = TrussEnvConfig(
-    model_source=spec,
-    max_steps=10_000,
-    nsubsteps=1,
-    speed=0.01,
-    forward_weight=5.0,
-    energy_weight=0.005,
-    alive_bonus=0.1,
-    rigidity_weight=0.5,
-    slip_weight=0.1,
-    critical_eig_threshold=0.03,
-    slip_height=0.2,
-    control_noise_std=0.0,
-    control_noise_relative=True,
-    runtime_apply_control_noise=False,
-)
-```
-
-Step/reset behavior:
-
-- `reset(seed=...)` follows the Gymnasium API and returns `(obs, info)`.
-- `step(action)` returns `(obs, reward, terminated, truncated, info)`.
-- `truncated` becomes true when `max_steps` is reached.
-- `terminated` becomes true when the normalized rigidity metric falls below
-  `critical_eig_threshold`.
-- `info` includes reward components and `critical_eig`.
-
-Action behavior:
-
-- `MujocoTrussEnv` sends clipped actuator controls directly in the MuJoCo
-  actuator control range.
-- `MujocoRelativeObsEnv` expects actions in `[-1, 1]`; each action component
-  changes the previous control by `action * config.speed`.
-- `MujocoVelocityCommandEnv` expects actions in `[-config.speed, config.speed]`
-  and sends those values directly.
-
-Reward behavior:
-
-- The default reward combines forward velocity, alive bonus, energy penalty,
-  rigidity reward, and slip penalty.
-- These defaults are provided for experimentation, not as a canonical objective
-  for every isoperimetric robot task.
-- Custom tasks should subclass an environment and override `_get_obs()`,
-  `_compute_reward()`, `reset()`, or `step()` as needed.
-
-Rendering:
-
-- `render_mode="rgb_array"` returns a rendered NumPy RGB image.
-- `render_mode="human"` opens a passive MuJoCo viewer when the local MuJoCo
-  viewer module is available.
-
-## Development
-
-Set up a development environment:
-
-```bash
-python -m pip install -e ".[dev]"
-```
-
-Run tests:
-
-```bash
-python -m pytest
-```
-
-Run linting and formatting checks:
-
-```bash
-python -m ruff check .
-python -m ruff format --check .
-```
-
-Build a local distribution:
-
-```bash
-python -m build
-```
-
-
-## Repository Layout
-
-```text
-mujoco-truss-gen/
-├── LICENSE
-├── README.md
-├── examples/
-│   └── custom_truss.py
-├── pyproject.toml
-├── tests/
-│   └── test_envs.py
-└── src/
-    ├── generate_mujoco_model.py
-    └── mujoco_truss_gen/
-        ├── __init__.py
-        ├── base_env.py
-        ├── generate_mujoco_model.py
-        ├── relative_observation_env.py
-        ├── velocity_command_env.py
-        └── mujoco_model/
-            ├── bodies.py
-            ├── builders.py
-            ├── constants.py
-            ├── constraints.py
-            ├── geometry.py
-            ├── io_viewer.py
-            ├── model.py
-            ├── model_types.py
-            ├── presets.py
-            └── tendons.py
 ```
 
 ## Citation
