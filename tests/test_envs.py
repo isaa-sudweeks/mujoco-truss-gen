@@ -259,6 +259,25 @@ def test_builtin_presets_reset_with_nodes_above_ground() -> None:
                 env.close()
 
 
+def test_realistic_octahedron_starts_above_collapse_threshold() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=True),
+            max_steps=1,
+            nsubsteps=1,
+        )
+    )
+    try:
+        env.reset(seed=0)
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        _, _, terminated, _, info = env.step(action)
+
+        assert info["critical_eig"] > env.config.critical_eig_threshold
+        assert not terminated
+    finally:
+        env.close()
+
+
 def test_octahedron_stays_finite_and_above_ground_under_zero_action() -> None:
     env = MujocoTrussEnv(
         TrussEnvConfig(

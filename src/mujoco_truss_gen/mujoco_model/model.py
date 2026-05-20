@@ -180,6 +180,12 @@ class MujocoModel:
     def set_wcrm(self, wcrm: bool) -> None:
         self.wcrm = wcrm
 
+    def _uses_realistic_triangle_bodies(self) -> bool:
+        return any(
+            self.model.body(body_id).name.startswith("tri_")
+            for body_id in range(self.model.nbody)
+        )
+
     def _structural_edges_from_xml(self, root: ET.Element) -> list[tuple[str, str]]:
         structural_tendon_names = set()
         actuator = root.find("actuator")
@@ -307,15 +313,67 @@ class MujocoModel:
             [self.data.cvel[self.node_body_ids[node_name]][3:] for node_name in self.node_names]
         )
 
-    def _rigidity_matrix(self) -> np.ndarray:
-        dims = len(self.active_axes)
-        num_nodes = len(self.node_names)
-        node_positions = self.get_node_position_dict()
+    def _logical_node_name(self, node_name: str) -> str:
+        return node_name.split("_tri_", 1)[0]
+
+    def _logical_rigidity_graph(
+        self,
+    ) -> tuple[list[str], dict[str, np.ndarray], list[tuple[str, str]], tuple[int, ...]]:
+        physical_positions = self.get_node_position_dict()
+        logical_instances: dict[str, list[str]] = {}
+        for node_name in self.node_names:
+            logical_instances.setdefault(self._logical_node_name(node_name), []).append(node_name)
+
+        node_names = sorted(logical_instances, key=_node_sort_key)
+        node_positions = {}
+        for node_name in node_names:
+            connector_body_id = mujoco.mj_name2id(
+                self.model,
+                mujoco.mjtObj.mjOBJ_BODY,
+                f"connector_ball_{node_name}",
+            )
+            if connector_body_id >= 0:
+                node_positions[node_name] = self.data.xpos[connector_body_id].copy()
+                continue
+
+            node_positions[node_name] = np.mean(
+                [physical_positions[instance] for instance in logical_instances[node_name]],
+                axis=0,
+            )
+
+        edges = []
+        edge_keys = set()
+        for node_a, node_b in self.structural_edges:
+            logical_a = self._logical_node_name(node_a)
+            logical_b = self._logical_node_name(node_b)
+            if logical_a == logical_b:
+                continue
+            key = tuple(sorted((logical_a, logical_b)))
+            if key in edge_keys:
+                continue
+            edges.append((logical_a, logical_b))
+            edge_keys.add(key)
+
+        return node_names, node_positions, edges, (0, 1, 2)
+
+    def _rigidity_matrix_data(self) -> tuple[np.ndarray, int]:
+        if self._uses_realistic_triangle_bodies():
+            node_names, node_positions, structural_edges, axis_indices = (
+                self._logical_rigidity_graph()
+            )
+        else:
+            node_names = self.node_names
+            node_positions = self.get_node_position_dict()
+            structural_edges = self.structural_edges
+            axis_indices = self.axis_indices
+
+        dims = len(axis_indices)
+        num_nodes = len(node_names)
         rows = []
 
-        for node_a, node_b in self.structural_edges:
-            pa = node_positions[node_a][list(self.axis_indices)]
-            pb = node_positions[node_b][list(self.axis_indices)]
+        for node_a, node_b in structural_edges:
+            pa = node_positions[node_a][list(axis_indices)]
+            pb = node_positions[node_b][list(axis_indices)]
             delta = pb - pa
             length = np.linalg.norm(delta)
             if length < 1e-8:
@@ -323,18 +381,21 @@ class MujocoModel:
 
             direction = delta / length
             row = np.zeros(num_nodes * dims, dtype=float)
-            ia = self.node_names.index(node_a) * dims
-            ib = self.node_names.index(node_b) * dims
+            ia = node_names.index(node_a) * dims
+            ib = node_names.index(node_b) * dims
             row[ia : ia + dims] = -direction
             row[ib : ib + dims] = direction
             rows.append(row)
 
         if not rows:
-            return np.zeros((0, num_nodes * dims), dtype=float)
-        return np.vstack(rows)
+            return np.zeros((0, num_nodes * dims), dtype=float), dims
+        return np.vstack(rows), dims
+
+    def _rigidity_matrix(self) -> np.ndarray:
+        return self._rigidity_matrix_data()[0]
 
     def _critical_eig(self) -> float:
-        rigidity_matrix = self._rigidity_matrix()
+        rigidity_matrix, dims = self._rigidity_matrix_data()
         if rigidity_matrix.size == 0:
             return 0.0
 
@@ -344,7 +405,6 @@ class MujocoModel:
             norm = 1.0
         eigvals = np.linalg.eigvalsh(rigidity_matrix.T @ rigidity_matrix)
         eigvals = np.sort(np.real(eigvals))
-        dims = len(self.active_axes)
         rigid_body_modes = dims + (dims * (dims - 1)) // 2
         if eigvals.size <= rigid_body_modes:
             return 0.0
