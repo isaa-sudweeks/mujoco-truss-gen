@@ -365,6 +365,20 @@ edge_index_tensor = torch.from_numpy(edge_index)
 x_tensor = torch.from_numpy(node_features)
 ```
 
+For realistic models, pass `graph_view="logical"` to collapse cloned triangle
+nodes back to the abstract logical graph:
+
+```python
+spec = get_mujoco_spec("octahedron", realistic=True)
+
+edge_index = get_edge_index(spec, graph_view="logical")
+node_features = get_node_features(
+    spec,
+    graph_view="logical",
+    aggregation="connector_ball",  # or "mean"
+)
+```
+
 ## Model Generation Contract
 
 Public generation helpers:

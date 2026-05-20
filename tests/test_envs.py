@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from mujoco_truss_gen import (
+    MujocoModel,
     PRESETS,
     MujocoRelativeObsEnv,
     MujocoTrussEnv,
@@ -16,6 +17,7 @@ from mujoco_truss_gen import (
     get_edge_index,
     get_icosahedron_definition,
     get_mujoco_spec,
+    get_node_features,
     get_route_lengths,
     save_xml,
 )
@@ -473,6 +475,79 @@ def test_routed_shape_spec_compiles_and_runs() -> None:
         assert "critical_eig" in info
     finally:
         env.close()
+
+
+def test_realistic_logical_gnn_edge_index_matches_abstract_graph() -> None:
+    abstract_model = get_mujoco_spec("octahedron", realistic=False)
+    realistic_model = get_mujoco_spec("octahedron", realistic=True)
+
+    abstract_edge_index = get_edge_index(abstract_model)
+    realistic_edge_index = get_edge_index(realistic_model, graph_view="logical")
+
+    assert realistic_edge_index.shape == abstract_edge_index.shape
+    assert realistic_edge_index.shape == (2, 24)
+    assert int(np.max(realistic_edge_index)) < get_node_features(
+        realistic_model,
+        graph_view="logical",
+    ).shape[0]
+
+
+def test_realistic_logical_gnn_node_features_support_mean_aggregation() -> None:
+    model = MujocoModel(get_mujoco_spec("octahedron", realistic=True))
+
+    logical_features = get_node_features(model, graph_view="logical", aggregation="mean")
+    physical_positions = model.get_node_position_dict()
+    physical_velocities = model.get_node_velocity_linear_dict()
+    node_1_instances = [
+        node_name
+        for node_name in model.node_names
+        if node_name == "node_1" or node_name.startswith("node_1_tri_")
+    ]
+    expected_node_1 = np.concatenate(
+        [
+            np.mean([physical_positions[node_name] for node_name in node_1_instances], axis=0),
+            np.mean([physical_velocities[node_name] for node_name in node_1_instances], axis=0),
+        ]
+    )
+
+    assert logical_features.shape == (6, 6)
+    np.testing.assert_allclose(logical_features[0], expected_node_1)
+
+
+def test_realistic_logical_gnn_node_features_support_connector_ball_aggregation() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+        "node_4": [0.4, -0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+        "triangle_2": ["node_1", "node_4", "node_2", "node_1"],
+    }
+    model = MujocoModel(get_mujoco_spec(node_dict, triangle_dict, realistic=True))
+
+    logical_features = get_node_features(
+        model,
+        graph_view="logical",
+        aggregation="connector_ball",
+    )
+    connector_ball_id = mujoco.mj_name2id(
+        model.model,
+        mujoco.mjtObj.mjOBJ_BODY,
+        "connector_ball_node_1",
+    )
+    node_3_id = model.node_body_ids["node_3"]
+    expected_node_1 = np.concatenate(
+        [model.data.xpos[connector_ball_id], model.data.cvel[connector_ball_id][3:]]
+    )
+    expected_node_3 = np.concatenate(
+        [model.data.xpos[node_3_id], model.data.cvel[node_3_id][3:]]
+    )
+
+    assert logical_features.shape == (4, 6)
+    np.testing.assert_allclose(logical_features[0], expected_node_1)
+    np.testing.assert_allclose(logical_features[2], expected_node_3)
 
 
 def test_routed_shape_generation_does_not_mutate_custom_dictionaries() -> None:
