@@ -301,6 +301,7 @@ def build_world() -> mujoco.MjSpec:
     spec = mujoco.MjSpec.from_string(
         """
 <mujoco>
+  <option integrator="implicitfast"/>
   <visual>
     <global azimuth="120" elevation="-25"/>
     <headlight ambient="0.24 0.24 0.24"

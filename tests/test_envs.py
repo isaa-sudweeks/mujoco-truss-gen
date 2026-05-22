@@ -56,7 +56,13 @@ def test_builtin_presets_compile() -> None:
 
 
 def test_generated_world_uses_professional_scene_defaults() -> None:
-    root = ET.fromstring(get_mujoco_spec("tetrahedron", realistic=False).to_xml())
+    spec = get_mujoco_spec("tetrahedron", realistic=False)
+    root = ET.fromstring(spec.to_xml())
+
+    option = root.find("./option")
+    assert option is not None
+    assert option.get("integrator") == "implicitfast"
+    assert spec.compile().opt.integrator == mujoco.mjtIntegrator.mjINT_IMPLICITFAST
 
     ground = root.find("./worldbody/geom[@name='ground']")
     assert ground is not None
