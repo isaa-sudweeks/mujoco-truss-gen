@@ -22,6 +22,11 @@ from mujoco_truss_gen.mujoco_model.model_types import (
     TriangleDict,
 )
 from mujoco_truss_gen.mujoco_model.presets import get_preset_definition
+from mujoco_truss_gen.mujoco_model.sensors import (
+    DEFAULT_ACCELEROMETER_CONFIG,
+    AccelerometerConfig,
+    add_node_accelerometers,
+)
 from mujoco_truss_gen.mujoco_model.tendons import (
     add_actuator,
     add_edge_tendon,
@@ -37,6 +42,7 @@ TENDON_RANGE_MIN_FACTOR = 0.5
 TENDON_RANGE_MAX_FACTOR = 2.0
 ACTUATOR_RANGE_MIN_FACTOR = 0.0
 ACTUATOR_RANGE_MAX_FACTOR = 3.0
+_DEFAULT_ACCELEROMETER_CONFIG = object()
 
 
 def clone_shared_nodes(
@@ -237,6 +243,9 @@ def build_triangle(
     triangle_dict: TriangleDict,
     *,
     realistic: bool = False,
+    accelerometer_config: AccelerometerConfig | dict[str, Any] | None | object = (
+        _DEFAULT_ACCELEROMETER_CONFIG
+    ),
 ) -> None:
     _validate_node_dict(node_dict)
     _validate_triangle_dict(node_dict, triangle_dict)
@@ -257,6 +266,15 @@ def build_triangle(
             center,
             scale,
             realistic=True,
+        )
+        add_node_accelerometers(
+            spec,
+            list(node_dict),
+            (
+                DEFAULT_ACCELEROMETER_CONFIG
+                if accelerometer_config is _DEFAULT_ACCELEROMETER_CONFIG
+                else accelerometer_config
+            ),
         )
     else:
         _lift_nodes_above_ground(node_dict)
@@ -463,7 +481,14 @@ def _looks_like_shape_dict(candidate: Any) -> bool:
     )
 
 
-def get_mujoco_spec(*args: Any, realistic: bool = False, **kwargs: Any) -> mujoco.MjSpec:
+def get_mujoco_spec(
+    *args: Any,
+    realistic: bool = False,
+    accelerometer_config: AccelerometerConfig | dict[str, Any] | None | object = (
+        _DEFAULT_ACCELEROMETER_CONFIG
+    ),
+    **kwargs: Any,
+) -> mujoco.MjSpec:
     if kwargs:
         unexpected = ", ".join(kwargs)
         raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
@@ -480,7 +505,15 @@ def get_mujoco_spec(*args: Any, realistic: bool = False, **kwargs: Any) -> mujoc
         )
 
     if isinstance(structure_dict, dict) and _looks_like_shape_dict(structure_dict):
+        if accelerometer_config is not _DEFAULT_ACCELEROMETER_CONFIG:
+            raise ValueError("accelerometer_config is only supported with triangle models.")
         build_shapes(spec, node_dict, structure_dict, realistic=realistic)
     else:
-        build_triangle(spec, node_dict, structure_dict, realistic=realistic)
+        build_triangle(
+            spec,
+            node_dict,
+            structure_dict,
+            realistic=realistic,
+            accelerometer_config=accelerometer_config,
+        )
     return spec

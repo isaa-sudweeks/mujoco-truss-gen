@@ -3,7 +3,10 @@ from __future__ import annotations
 from mujoco_truss_gen.base_env import MujocoTrussEnv, TrussEnvConfig
 from mujoco_truss_gen.mesh_import import stl_to_shape_dict
 from mujoco_truss_gen.mujoco_model import (
+    DEFAULT_ACCELEROMETER_CONFIG,
     PRESETS,
+    AccelerometerConfig,
+    add_node_accelerometers,
     build_abstract_shapes,
     build_shapes,
     build_triangle,
@@ -24,12 +27,15 @@ from mujoco_truss_gen.relative_observation_env import MujocoRelativeObsEnv
 from mujoco_truss_gen.velocity_command_env import MujocoVelocityCommandEnv
 
 __all__ = [
+    "AccelerometerConfig",
+    "DEFAULT_ACCELEROMETER_CONFIG",
     "MujocoModel",
     "MujocoRelativeObsEnv",
     "MujocoTrussEnv",
     "MujocoVelocityCommandEnv",
     "PRESETS",
     "TrussEnvConfig",
+    "add_node_accelerometers",
     "build_abstract_shapes",
     "build_shapes",
     "build_triangle",

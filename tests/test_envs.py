@@ -8,8 +8,9 @@ import numpy as np
 import pytest
 
 from mujoco_truss_gen import (
-    MujocoModel,
     PRESETS,
+    AccelerometerConfig,
+    MujocoModel,
     MujocoRelativeObsEnv,
     MujocoTrussEnv,
     MujocoVelocityCommandEnv,
@@ -122,6 +123,54 @@ def test_generated_spec_uses_firehose_steel_and_black_materials() -> None:
         _xml_vector(node_geom.get("rgba", "")),
         [0.18, 0.18, 0.18, 1.0],
     )
+
+
+def test_realistic_spec_adds_accelerometers_to_each_generated_node() -> None:
+    root = ET.fromstring(get_mujoco_spec("octahedron", realistic=True).to_xml())
+
+    node_site_names = {
+        site.get("name")
+        for site in root.findall(".//body/site")
+        if site.get("name", "").startswith("node_")
+    }
+    accelerometers = root.findall("./sensor/accelerometer")
+
+    assert {sensor.get("site") for sensor in accelerometers} == node_site_names
+    assert {sensor.get("name") for sensor in accelerometers} == {
+        f"accel_{node_name}" for node_name in node_site_names
+    }
+
+
+def test_realistic_accelerometer_config_is_passed_to_mujoco() -> None:
+    spec = get_mujoco_spec(
+        "octahedron",
+        realistic=True,
+        accelerometer_config=AccelerometerConfig(
+            noise=0.03,
+            cutoff=25.0,
+            nsample=3,
+            delay=0.01,
+            name_prefix="imu_accel",
+        ),
+    )
+    root = ET.fromstring(spec.to_xml())
+    sensor = root.find("./sensor/accelerometer")
+
+    assert sensor is not None
+    assert sensor.get("name", "").startswith("imu_accel_node_")
+    assert float(sensor.get("noise", "nan")) == pytest.approx(0.03)
+    assert float(sensor.get("cutoff", "nan")) == pytest.approx(25.0)
+    assert int(sensor.get("nsample", "0")) == 3
+    assert float(sensor.get("delay", "nan")) == pytest.approx(0.01)
+    spec.compile()
+
+
+def test_realistic_accelerometers_can_be_disabled() -> None:
+    root = ET.fromstring(
+        get_mujoco_spec("octahedron", realistic=True, accelerometer_config=None).to_xml()
+    )
+
+    assert root.find("./sensor/accelerometer") is None
 
 
 def test_icosahedron_definition_shape() -> None:

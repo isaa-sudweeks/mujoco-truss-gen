@@ -137,3 +137,8 @@ does not mutate the original `node_dict` or `triangle_dict` passed by the caller
   connector balls. Shared-node boxes are face-aligned toward their connector rod,
   so the visible box face and rod direction represent the intended module
   connection geometry.
+
+Realistic triangle models include one accelerometer sensor per generated node
+site by default. Pass `accelerometer_config=AccelerometerConfig(...)` to
+configure sensor fields such as `noise`, `cutoff`, `nsample`, `delay`, or
+`name_prefix`; pass `accelerometer_config=None` to omit them.
