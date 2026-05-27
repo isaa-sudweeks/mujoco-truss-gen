@@ -23,8 +23,15 @@ from mujoco_truss_gen.mujoco_model.presets import (
     get_octahedron_definition,
     get_preset_definition,
 )
+from mujoco_truss_gen.mujoco_model.sensors import (
+    DEFAULT_ACCELEROMETER_CONFIG,
+    AccelerometerConfig,
+    add_node_accelerometers,
+)
 
 __all__ = [
+    "AccelerometerConfig",
+    "DEFAULT_ACCELEROMETER_CONFIG",
     "MujocoModel",
     "PRESETS",
     "build_abstract_shapes",
@@ -33,6 +40,7 @@ __all__ = [
     "build_shapes",
     "build_triangle",
     "build_world",
+    "add_node_accelerometers",
     "create_node_bodies",
     "create_triangle_bodies",
     "get_edge_index",

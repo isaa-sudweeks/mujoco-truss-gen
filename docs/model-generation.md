@@ -92,16 +92,17 @@ does not mutate the original `node_dict` or `triangle_dict` passed by the caller
   spec.
 - `build_shapes(spec, node_dict, shape_dict, realistic=False)` adds routed
   continuous-tube shapes with per-edge tendons and route-length constraints.
-- `get_mujoco_spec("octahedron", realistic=False)` and the other names in
-  `PRESETS` build built-in presets.
+- `get_mujoco_spec("octahedron", realistic=False, scale=1.0)` and the other
+  names in `PRESETS` build built-in presets. Increase or decrease `scale` to
+  generate the same preset in a different unit scale.
 - `get_mujoco_spec(node_dict, triangle_dict, realistic=False)` builds a custom
   dictionary-defined truss.
 - `get_mujoco_spec(node_dict, shape_dict, realistic=False)` builds a routed
   continuous-tube shape model.
-- `get_octahedron_definition()` returns fresh node and triangle dictionaries for
-  the built-in preset.
-- `get_icosahedron_definition()` returns fresh node and triangle dictionaries
-  for the built-in preset.
+- `get_octahedron_definition(scale=1.0)` returns fresh node and triangle
+  dictionaries for the built-in preset.
+- `get_icosahedron_definition(scale=1.0)` returns fresh node and triangle
+  dictionaries for the built-in preset.
 - `get_perimeter(node_dict, triangle_dict)` computes each triangle perimeter
   from the first three vertices.
 - `save_xml(spec, filename)` writes `spec.to_xml()` to disk and returns the
@@ -137,3 +138,8 @@ does not mutate the original `node_dict` or `triangle_dict` passed by the caller
   connector balls. Shared-node boxes are face-aligned toward their connector rod,
   so the visible box face and rod direction represent the intended module
   connection geometry.
+
+Realistic triangle models include one accelerometer sensor per generated node
+site by default. Pass `accelerometer_config=AccelerometerConfig(...)` to
+configure sensor fields such as `noise`, `cutoff`, `nsample`, `delay`, or
+`name_prefix`; pass `accelerometer_config=None` to omit them.

@@ -22,6 +22,11 @@ from mujoco_truss_gen.mujoco_model.model_types import (
     TriangleDict,
 )
 from mujoco_truss_gen.mujoco_model.presets import get_preset_definition
+from mujoco_truss_gen.mujoco_model.sensors import (
+    DEFAULT_ACCELEROMETER_CONFIG,
+    AccelerometerConfig,
+    add_node_accelerometers,
+)
 from mujoco_truss_gen.mujoco_model.tendons import (
     add_actuator,
     add_edge_tendon,
@@ -37,6 +42,7 @@ TENDON_RANGE_MIN_FACTOR = 0.5
 TENDON_RANGE_MAX_FACTOR = 2.0
 ACTUATOR_RANGE_MIN_FACTOR = 0.0
 ACTUATOR_RANGE_MAX_FACTOR = 3.0
+_DEFAULT_ACCELEROMETER_CONFIG = object()
 
 
 def clone_shared_nodes(
@@ -107,15 +113,34 @@ def clone_shared_nodes(
     return original_node_dict, node_instances, center, scale
 
 
-def build_abstract_triangle(spec: mujoco.MjSpec, triangle_dict: TriangleDict) -> None:
+def build_abstract_triangle(
+    spec: mujoco.MjSpec,
+    node_dict_or_triangle_dict: NodeDict | TriangleDict,
+    triangle_dict: TriangleDict | None = None,
+) -> None:
+    node_dict = node_dict_or_triangle_dict if triangle_dict is not None else None
+    if triangle_dict is None:
+        triangle_dict = node_dict_or_triangle_dict
+
     actuator_names: set[str] = set()
     for triangle_nodes in triangle_dict.values():
         nodes = triangle_nodes[:3]
         passive_node = triangle_nodes[3]
 
-        add_tendon(spec, from_node_name=nodes[0], to_node_name=nodes[1])
-        add_tendon(spec, from_node_name=nodes[1], to_node_name=nodes[2])
-        add_tendon(spec, from_node_name=nodes[2], to_node_name=nodes[0])
+        for index, from_node in enumerate(nodes):
+            to_node = nodes[(index + 1) % 3]
+            add_tendon(
+                spec,
+                from_node_name=from_node,
+                to_node_name=to_node,
+                tendon_range=(
+                    _upper_scaled_tendon_range(
+                        _distance_between_nodes(node_dict, from_node, to_node)
+                    )
+                    if node_dict is not None
+                    else None
+                ),
+            )
 
         for index, from_node in enumerate(nodes):
             to_node = nodes[(index + 1) % 3]
@@ -237,6 +262,9 @@ def build_triangle(
     triangle_dict: TriangleDict,
     *,
     realistic: bool = False,
+    accelerometer_config: AccelerometerConfig | dict[str, Any] | None | object = (
+        _DEFAULT_ACCELEROMETER_CONFIG
+    ),
 ) -> None:
     _validate_node_dict(node_dict)
     _validate_triangle_dict(node_dict, triangle_dict)
@@ -258,10 +286,19 @@ def build_triangle(
             scale,
             realistic=True,
         )
+        add_node_accelerometers(
+            spec,
+            list(node_dict),
+            (
+                DEFAULT_ACCELEROMETER_CONFIG
+                if accelerometer_config is _DEFAULT_ACCELEROMETER_CONFIG
+                else accelerometer_config
+            ),
+        )
     else:
         _lift_nodes_above_ground(node_dict)
         create_node_bodies(spec, node_dict)
-        build_abstract_triangle(spec, triangle_dict)
+        build_abstract_triangle(spec, node_dict, triangle_dict)
         return
 
     build_realistic_triangle(spec, triangle_dict)
@@ -339,9 +376,18 @@ def _route_length(node_dict: NodeDict, route: list[str]) -> float:
 
 def _scaled_tendon_range(length: float) -> list[float]:
     if length <= 0.0:
-        raise ValueError("Cannot scale tendon limits for a zero-length STL route edge.")
+        raise ValueError("Cannot scale tendon limits for a zero-length edge.")
     return [
         length * TENDON_RANGE_MIN_FACTOR,
+        length * TENDON_RANGE_MAX_FACTOR,
+    ]
+
+
+def _upper_scaled_tendon_range(length: float) -> list[float]:
+    if length <= 0.0:
+        raise ValueError("Cannot scale tendon limits for a zero-length edge.")
+    return [
+        0.5,
         length * TENDON_RANGE_MAX_FACTOR,
     ]
 
@@ -463,16 +509,26 @@ def _looks_like_shape_dict(candidate: Any) -> bool:
     )
 
 
-def get_mujoco_spec(*args: Any, realistic: bool = False, **kwargs: Any) -> mujoco.MjSpec:
+def get_mujoco_spec(
+    *args: Any,
+    realistic: bool = False,
+    scale: float = 1.0,
+    accelerometer_config: AccelerometerConfig | dict[str, Any] | None | object = (
+        _DEFAULT_ACCELEROMETER_CONFIG
+    ),
+    **kwargs: Any,
+) -> mujoco.MjSpec:
     if kwargs:
         unexpected = ", ".join(kwargs)
         raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
 
     spec = build_world()
     if len(args) == 2:
+        if scale != 1.0:
+            raise ValueError("scale is only supported when building a named preset.")
         node_dict, structure_dict = args
     elif len(args) == 1 and isinstance(args[0], str):
-        node_dict, structure_dict = get_preset_definition(args[0])
+        node_dict, structure_dict = get_preset_definition(args[0], scale=scale)
     else:
         raise ValueError(
             "get_mujoco_spec() takes node_dict and triangle_dict, node_dict and shape_dict, "
@@ -480,7 +536,15 @@ def get_mujoco_spec(*args: Any, realistic: bool = False, **kwargs: Any) -> mujoc
         )
 
     if isinstance(structure_dict, dict) and _looks_like_shape_dict(structure_dict):
+        if accelerometer_config is not _DEFAULT_ACCELEROMETER_CONFIG:
+            raise ValueError("accelerometer_config is only supported with triangle models.")
         build_shapes(spec, node_dict, structure_dict, realistic=realistic)
     else:
-        build_triangle(spec, node_dict, structure_dict, realistic=realistic)
+        build_triangle(
+            spec,
+            node_dict,
+            structure_dict,
+            realistic=realistic,
+            accelerometer_config=accelerometer_config,
+        )
     return spec

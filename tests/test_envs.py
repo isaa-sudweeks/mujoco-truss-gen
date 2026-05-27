@@ -8,8 +8,9 @@ import numpy as np
 import pytest
 
 from mujoco_truss_gen import (
-    MujocoModel,
     PRESETS,
+    AccelerometerConfig,
+    MujocoModel,
     MujocoRelativeObsEnv,
     MujocoTrussEnv,
     MujocoVelocityCommandEnv,
@@ -18,6 +19,7 @@ from mujoco_truss_gen import (
     get_icosahedron_definition,
     get_mujoco_spec,
     get_node_features,
+    get_preset_definition,
     get_route_lengths,
     save_xml,
 )
@@ -53,6 +55,45 @@ def test_builtin_presets_compile() -> None:
 
     for preset_name in ("octahedron", "icosahedron", "solar_array"):
         get_mujoco_spec(preset_name, realistic=True).compile()
+
+
+def test_builtin_preset_definitions_support_unit_scale() -> None:
+    unscaled_nodes, unscaled_structure = get_preset_definition("octahedron")
+    same_nodes, same_structure = get_preset_definition("octahedron", scale=1.0)
+    scaled_nodes, scaled_structure = get_preset_definition("octahedron", scale=2.5)
+
+    assert same_nodes == unscaled_nodes
+    assert same_structure == unscaled_structure
+    assert scaled_structure == unscaled_structure
+    for node_name, position in unscaled_nodes.items():
+        np.testing.assert_allclose(scaled_nodes[node_name], np.asarray(position) * 2.5)
+
+
+def test_scaled_named_preset_compiles() -> None:
+    get_mujoco_spec("tetrahedron", scale=0.5, realistic=False).compile()
+    get_mujoco_spec("octahedron", scale=2.5, realistic=False).compile()
+    get_mujoco_spec("octahedron", scale=2.0, realistic=True).compile()
+
+
+def test_scaled_abstract_preset_keeps_control_values_unscaled() -> None:
+    root = ET.fromstring(get_mujoco_spec("octahedron", scale=2.5, realistic=False).to_xml())
+
+    tendon = root.find(".//tendon/spatial[@name='tendon_node_1_node_2']")
+    assert tendon is not None
+    np.testing.assert_allclose(_xml_vector(tendon.get("range", "")), [0.5, 5.0])
+
+    actuator = root.find(".//actuator/general[@name='act_12']")
+    assert actuator is not None
+    np.testing.assert_allclose(_xml_vector(actuator.get("ctrlrange", "")), [-0.05, 0.05])
+    np.testing.assert_allclose(_xml_vector(actuator.get("actrange", "")), [0.0, 3.0])
+
+
+def test_preset_scale_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="scale must be greater than zero"):
+        get_preset_definition("octahedron", scale=0.0)
+
+    with pytest.raises(ValueError, match="scale is only supported"):
+        get_mujoco_spec({"node_1": [0.0, 0.0, 0.1]}, {}, scale=2.0)
 
 
 def test_generated_world_uses_professional_scene_defaults() -> None:
@@ -122,6 +163,54 @@ def test_generated_spec_uses_firehose_steel_and_black_materials() -> None:
         _xml_vector(node_geom.get("rgba", "")),
         [0.18, 0.18, 0.18, 1.0],
     )
+
+
+def test_realistic_spec_adds_accelerometers_to_each_generated_node() -> None:
+    root = ET.fromstring(get_mujoco_spec("octahedron", realistic=True).to_xml())
+
+    node_site_names = {
+        site.get("name")
+        for site in root.findall(".//body/site")
+        if site.get("name", "").startswith("node_")
+    }
+    accelerometers = root.findall("./sensor/accelerometer")
+
+    assert {sensor.get("site") for sensor in accelerometers} == node_site_names
+    assert {sensor.get("name") for sensor in accelerometers} == {
+        f"accel_{node_name}" for node_name in node_site_names
+    }
+
+
+def test_realistic_accelerometer_config_is_passed_to_mujoco() -> None:
+    spec = get_mujoco_spec(
+        "octahedron",
+        realistic=True,
+        accelerometer_config=AccelerometerConfig(
+            noise=0.03,
+            cutoff=25.0,
+            nsample=3,
+            delay=0.01,
+            name_prefix="imu_accel",
+        ),
+    )
+    root = ET.fromstring(spec.to_xml())
+    sensor = root.find("./sensor/accelerometer")
+
+    assert sensor is not None
+    assert sensor.get("name", "").startswith("imu_accel_node_")
+    assert float(sensor.get("noise", "nan")) == pytest.approx(0.03)
+    assert float(sensor.get("cutoff", "nan")) == pytest.approx(25.0)
+    assert int(sensor.get("nsample", "0")) == 3
+    assert float(sensor.get("delay", "nan")) == pytest.approx(0.01)
+    spec.compile()
+
+
+def test_realistic_accelerometers_can_be_disabled() -> None:
+    root = ET.fromstring(
+        get_mujoco_spec("octahedron", realistic=True, accelerometer_config=None).to_xml()
+    )
+
+    assert root.find("./sensor/accelerometer") is None
 
 
 def test_icosahedron_definition_shape() -> None:

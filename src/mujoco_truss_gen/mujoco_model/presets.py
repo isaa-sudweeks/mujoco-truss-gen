@@ -1,13 +1,29 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from copy import deepcopy
 
 import numpy as np
 
 from mujoco_truss_gen.mujoco_model.model_types import NodeDict, ShapeDict, TriangleDict
 
 
-def get_octahedron_definition() -> tuple[NodeDict, TriangleDict]:
+def _validate_scale(scale: float) -> float:
+    scale = float(scale)
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError("scale must be greater than zero.")
+    return scale
+
+
+def _scale_node_dict(node_dict: NodeDict, scale: float) -> NodeDict:
+    scale = _validate_scale(scale)
+    return {
+        node_name: [scale * coordinate for coordinate in position]
+        for node_name, position in node_dict.items()
+    }
+
+
+def get_octahedron_definition(scale: float = 1.0) -> tuple[NodeDict, TriangleDict]:
     node_dict = {
         "node_1": [0.0, 0.0, 0.1],
         "node_2": [1.0, 0.0, 0.1],
@@ -22,12 +38,12 @@ def get_octahedron_definition() -> tuple[NodeDict, TriangleDict]:
         "triangle_3": ["node_3", "node_6", "node_2", "node_6"],
         "triangle_4": ["node_4", "node_6", "node_5", "node_6"],
     }
-    return node_dict, triangle_dict
+    return _scale_node_dict(node_dict, scale), triangle_dict
 
 
-def get_icosahedron_definition() -> tuple[NodeDict, TriangleDict]:
+def get_icosahedron_definition(scale: float = 1.0) -> tuple[NodeDict, TriangleDict]:
     phi = (1.0 + 5.0**0.5) / 2.0
-    scale = 0.5
+    vertex_scale = 0.5
     z_offset = 0.95
     vertices = [
         (-1.0, phi, 0.0),
@@ -67,7 +83,7 @@ def get_icosahedron_definition() -> tuple[NodeDict, TriangleDict]:
     ]
 
     node_dict = {
-        f"node_{index}": [scale * x, scale * y, scale * z + z_offset]
+        f"node_{index}": [vertex_scale * x, vertex_scale * y, vertex_scale * z + z_offset]
         for index, (x, y, z) in enumerate(vertices, start=1)
     }
     triangle_dict = {
@@ -78,10 +94,10 @@ def get_icosahedron_definition() -> tuple[NodeDict, TriangleDict]:
         for index, face in enumerate(faces, start=1)
     }
 
-    return node_dict, triangle_dict
+    return _scale_node_dict(node_dict, scale), triangle_dict
 
 
-def get_solar_array_definition() -> tuple[NodeDict, TriangleDict]:
+def get_solar_array_definition(scale: float = 1.0) -> tuple[NodeDict, TriangleDict]:
     node_dict = {
         "node_1": [0.0, 0.0, 0.1],
         "node_2": [1.0, 0.0, 0.1],
@@ -102,10 +118,10 @@ def get_solar_array_definition() -> tuple[NodeDict, TriangleDict]:
         "triangle_6": ["node_5", "node_4", "node_7", "node_7"],
         "triangle_7": ["node_7", "node_8", "node_9", "node_9"],
     }
-    return node_dict, triangle_dict
+    return _scale_node_dict(node_dict, scale), triangle_dict
 
 
-def get_tetrahedron_definition() -> tuple[NodeDict, ShapeDict]:
+def get_tetrahedron_definition(scale: float = 1.0) -> tuple[NodeDict, ShapeDict]:
     node_dict = {
         "node_1": [0.0, 0.0, 0.1],
         "node_2": [1.0, 0.0, 0.1],
@@ -129,10 +145,10 @@ def get_tetrahedron_definition() -> tuple[NodeDict, ShapeDict]:
         },
     }
 
-    return node_dict, shape_dict
+    return _scale_node_dict(node_dict, scale), shape_dict
 
 
-PRESETS: dict[str, Callable[[], tuple[NodeDict, TriangleDict | ShapeDict]]] = {
+PRESETS: dict[str, Callable[[float], tuple[NodeDict, TriangleDict | ShapeDict]]] = {
     "octahedron": get_octahedron_definition,
     "icosahedron": get_icosahedron_definition,
     "solar_array": get_solar_array_definition,
@@ -140,7 +156,10 @@ PRESETS: dict[str, Callable[[], tuple[NodeDict, TriangleDict | ShapeDict]]] = {
 }
 
 
-def get_preset_definition(structure_type: str) -> tuple[NodeDict, TriangleDict | ShapeDict]:
+def get_preset_definition(
+    structure_type: str,
+    scale: float = 1.0,
+) -> tuple[NodeDict, TriangleDict | ShapeDict]:
     try:
         preset = PRESETS[structure_type]
     except KeyError as exc:
@@ -148,4 +167,5 @@ def get_preset_definition(structure_type: str) -> tuple[NodeDict, TriangleDict |
         message = f"Unknown structure type: {structure_type}. Known presets: {known_presets}"
         raise ValueError(message) from exc
 
-    return preset()
+    node_dict, structure_dict = preset(scale)
+    return node_dict, deepcopy(structure_dict)
