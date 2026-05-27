@@ -113,15 +113,34 @@ def clone_shared_nodes(
     return original_node_dict, node_instances, center, scale
 
 
-def build_abstract_triangle(spec: mujoco.MjSpec, triangle_dict: TriangleDict) -> None:
+def build_abstract_triangle(
+    spec: mujoco.MjSpec,
+    node_dict_or_triangle_dict: NodeDict | TriangleDict,
+    triangle_dict: TriangleDict | None = None,
+) -> None:
+    node_dict = node_dict_or_triangle_dict if triangle_dict is not None else None
+    if triangle_dict is None:
+        triangle_dict = node_dict_or_triangle_dict
+
     actuator_names: set[str] = set()
     for triangle_nodes in triangle_dict.values():
         nodes = triangle_nodes[:3]
         passive_node = triangle_nodes[3]
 
-        add_tendon(spec, from_node_name=nodes[0], to_node_name=nodes[1])
-        add_tendon(spec, from_node_name=nodes[1], to_node_name=nodes[2])
-        add_tendon(spec, from_node_name=nodes[2], to_node_name=nodes[0])
+        for index, from_node in enumerate(nodes):
+            to_node = nodes[(index + 1) % 3]
+            add_tendon(
+                spec,
+                from_node_name=from_node,
+                to_node_name=to_node,
+                tendon_range=(
+                    _upper_scaled_tendon_range(
+                        _distance_between_nodes(node_dict, from_node, to_node)
+                    )
+                    if node_dict is not None
+                    else None
+                ),
+            )
 
         for index, from_node in enumerate(nodes):
             to_node = nodes[(index + 1) % 3]
@@ -279,7 +298,7 @@ def build_triangle(
     else:
         _lift_nodes_above_ground(node_dict)
         create_node_bodies(spec, node_dict)
-        build_abstract_triangle(spec, triangle_dict)
+        build_abstract_triangle(spec, node_dict, triangle_dict)
         return
 
     build_realistic_triangle(spec, triangle_dict)
@@ -357,9 +376,18 @@ def _route_length(node_dict: NodeDict, route: list[str]) -> float:
 
 def _scaled_tendon_range(length: float) -> list[float]:
     if length <= 0.0:
-        raise ValueError("Cannot scale tendon limits for a zero-length STL route edge.")
+        raise ValueError("Cannot scale tendon limits for a zero-length edge.")
     return [
         length * TENDON_RANGE_MIN_FACTOR,
+        length * TENDON_RANGE_MAX_FACTOR,
+    ]
+
+
+def _upper_scaled_tendon_range(length: float) -> list[float]:
+    if length <= 0.0:
+        raise ValueError("Cannot scale tendon limits for a zero-length edge.")
+    return [
+        0.5,
         length * TENDON_RANGE_MAX_FACTOR,
     ]
 
@@ -484,6 +512,7 @@ def _looks_like_shape_dict(candidate: Any) -> bool:
 def get_mujoco_spec(
     *args: Any,
     realistic: bool = False,
+    scale: float = 1.0,
     accelerometer_config: AccelerometerConfig | dict[str, Any] | None | object = (
         _DEFAULT_ACCELEROMETER_CONFIG
     ),
@@ -495,9 +524,11 @@ def get_mujoco_spec(
 
     spec = build_world()
     if len(args) == 2:
+        if scale != 1.0:
+            raise ValueError("scale is only supported when building a named preset.")
         node_dict, structure_dict = args
     elif len(args) == 1 and isinstance(args[0], str):
-        node_dict, structure_dict = get_preset_definition(args[0])
+        node_dict, structure_dict = get_preset_definition(args[0], scale=scale)
     else:
         raise ValueError(
             "get_mujoco_spec() takes node_dict and triangle_dict, node_dict and shape_dict, "

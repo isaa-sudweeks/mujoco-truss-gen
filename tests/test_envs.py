@@ -19,6 +19,7 @@ from mujoco_truss_gen import (
     get_icosahedron_definition,
     get_mujoco_spec,
     get_node_features,
+    get_preset_definition,
     get_route_lengths,
     save_xml,
 )
@@ -54,6 +55,45 @@ def test_builtin_presets_compile() -> None:
 
     for preset_name in ("octahedron", "icosahedron", "solar_array"):
         get_mujoco_spec(preset_name, realistic=True).compile()
+
+
+def test_builtin_preset_definitions_support_unit_scale() -> None:
+    unscaled_nodes, unscaled_structure = get_preset_definition("octahedron")
+    same_nodes, same_structure = get_preset_definition("octahedron", scale=1.0)
+    scaled_nodes, scaled_structure = get_preset_definition("octahedron", scale=2.5)
+
+    assert same_nodes == unscaled_nodes
+    assert same_structure == unscaled_structure
+    assert scaled_structure == unscaled_structure
+    for node_name, position in unscaled_nodes.items():
+        np.testing.assert_allclose(scaled_nodes[node_name], np.asarray(position) * 2.5)
+
+
+def test_scaled_named_preset_compiles() -> None:
+    get_mujoco_spec("tetrahedron", scale=0.5, realistic=False).compile()
+    get_mujoco_spec("octahedron", scale=2.5, realistic=False).compile()
+    get_mujoco_spec("octahedron", scale=2.0, realistic=True).compile()
+
+
+def test_scaled_abstract_preset_keeps_control_values_unscaled() -> None:
+    root = ET.fromstring(get_mujoco_spec("octahedron", scale=2.5, realistic=False).to_xml())
+
+    tendon = root.find(".//tendon/spatial[@name='tendon_node_1_node_2']")
+    assert tendon is not None
+    np.testing.assert_allclose(_xml_vector(tendon.get("range", "")), [0.5, 5.0])
+
+    actuator = root.find(".//actuator/general[@name='act_12']")
+    assert actuator is not None
+    np.testing.assert_allclose(_xml_vector(actuator.get("ctrlrange", "")), [-0.05, 0.05])
+    np.testing.assert_allclose(_xml_vector(actuator.get("actrange", "")), [0.0, 3.0])
+
+
+def test_preset_scale_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="scale must be greater than zero"):
+        get_preset_definition("octahedron", scale=0.0)
+
+    with pytest.raises(ValueError, match="scale is only supported"):
+        get_mujoco_spec({"node_1": [0.0, 0.0, 0.1]}, {}, scale=2.0)
 
 
 def test_generated_world_uses_professional_scene_defaults() -> None:
