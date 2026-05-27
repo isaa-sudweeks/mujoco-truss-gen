@@ -7,19 +7,16 @@ import numpy as np
 
 from mujoco_truss_gen.mujoco_model.constants import (
     BOX_SIZE,
-    CONNECTOR_MASS,
-    CONNECTOR_RADIUS,
-    HINGE_FORCE_RANGE,
-    HINGE_POSITION_KP,
+    GEOM_CONTACT_AFFINITY,
+    GEOM_CONTACT_TYPE,
+    MODEL_INTEGRATOR,
     NODE_MASS,
     NODE_MATERIAL,
     NODE_RADIUS,
     NODE_RGBA,
-    ROD_MASS,
     ROD_MATERIAL,
-    ROD_RADIUS,
     ROD_RGBA,
-    TRIANGLE_BODY_MASS,
+    TrussPhysicalParameters,
 )
 from mujoco_truss_gen.mujoco_model.controllers import angle_bisector_actuator_name
 from mujoco_truss_gen.mujoco_model.geometry import triangle_frame
@@ -34,8 +31,8 @@ def find_original_node(node_instances: dict[str, list[str]], instance_name: str)
 
 
 def disable_geom_contacts(geom: Any) -> None:
-    geom.contype = 0
-    geom.conaffinity = 1
+    geom.contype = GEOM_CONTACT_TYPE
+    geom.conaffinity = GEOM_CONTACT_AFFINITY
 
 
 def add_planar_node_body(
@@ -44,15 +41,17 @@ def add_planar_node_body(
     local_position: Vector,
     index: int,
     connector_direction: Vector | None = None,
+    mass: float = NODE_MASS,
+    box_size: list[float] | tuple[float, float, float] = BOX_SIZE,
 ) -> Any:
     node_body = parent_body.add_body(name=node_name, pos=local_position)
     node_body.add_site(name=node_name)
     node_geom = node_body.add_geom(
         type=mujoco.mjtGeom.mjGEOM_BOX,
-        size=BOX_SIZE,
+        size=box_size,
         rgba=NODE_RGBA,
         material=NODE_MATERIAL,
-        mass=NODE_MASS,
+        mass=mass,
     )
     if connector_direction is not None:
         node_geom.quat = _face_normal_quat(connector_direction)
@@ -102,29 +101,42 @@ def _face_normal_quat(connector_direction: Vector) -> list[float]:
     return [float(np.cos(half_angle)), 0.0, 0.0, float(np.sin(half_angle))]
 
 
-def add_free_node_body(spec: mujoco.MjSpec, node_name: str, position: Vector) -> Any:
+def add_free_node_body(
+    spec: mujoco.MjSpec,
+    node_name: str,
+    position: Vector,
+    physical_params: TrussPhysicalParameters | None = None,
+) -> Any:
+    params = physical_params or TrussPhysicalParameters()
     node_body = spec.worldbody.add_body(name=node_name, pos=position)
     node_body.add_freejoint()
     node_body.add_site(name=node_name)
     node_geom = node_body.add_geom(
         type=mujoco.mjtGeom.mjGEOM_SPHERE,
-        size=[NODE_RADIUS],
+        size=[params.node_radius],
         rgba=NODE_RGBA,
         material=NODE_MATERIAL,
-        mass=NODE_MASS,
+        mass=params.node_mass,
     )
     disable_geom_contacts(node_geom)
     return node_body
 
 
-def add_slide_node_body(spec: mujoco.MjSpec, node_name: str, position: Vector) -> Any:
+def add_slide_node_body(
+    spec: mujoco.MjSpec,
+    node_name: str,
+    position: Vector,
+    mass: float = NODE_MASS,
+    node_radius: float = NODE_RADIUS,
+) -> Any:
     node_body = spec.worldbody.add_body(name=node_name, pos=position)
     node_body.add_site(name=node_name)
     node_body.add_geom(
         type=mujoco.mjtGeom.mjGEOM_SPHERE,
-        size=[NODE_RADIUS],
+        size=[node_radius],
         rgba=NODE_RGBA,
         material=NODE_MATERIAL,
+        mass=mass,
     )
     node_body.add_joint(
         type=mujoco.mjtJoint.mjJNT_SLIDE,
@@ -147,13 +159,25 @@ def add_slide_node_body(spec: mujoco.MjSpec, node_name: str, position: Vector) -
     return node_body
 
 
+def _node_mass(
+    node_name: str,
+    triangle_nodes: list[str],
+    physical_params: TrussPhysicalParameters,
+) -> float:
+    if node_name == triangle_nodes[3]:
+        return physical_params.passive_node_mass
+    return physical_params.active_node_mass
+
+
 def create_connector_balls(
     spec: mujoco.MjSpec,
     original_node_dict: dict[str, np.ndarray],
     node_instances: dict[str, list[str]],
     center: np.ndarray,
     scale: float,
+    physical_params: TrussPhysicalParameters | None = None,
 ) -> dict[str, Any]:
+    params = physical_params or TrussPhysicalParameters()
     connector_balls = {}
     for original_name, instances in node_instances.items():
         if len(instances) <= 1:
@@ -166,10 +190,10 @@ def create_connector_balls(
 
         ball_geom = ball.add_geom(
             type=mujoco.mjtGeom.mjGEOM_SPHERE,
-            size=[CONNECTOR_RADIUS],
+            size=[params.connector_radius],
             rgba=NODE_RGBA,
             material=NODE_MATERIAL,
-            mass=CONNECTOR_MASS,
+            mass=params.connector_mass,
         )
         disable_geom_contacts(ball_geom)
 
@@ -189,7 +213,9 @@ def connect_node_to_ball(
     original_name: str,
     node_dict: NodeDict,
     rotation_matrix: np.ndarray,
+    physical_params: TrussPhysicalParameters | None = None,
 ) -> None:
+    params = physical_params or TrussPhysicalParameters()
     ball_position = np.array(ball.pos, dtype=float)
     node_position = np.array(node_dict[instance_name], dtype=float)
     rod_vector = np.dot(rotation_matrix.T, ball_position - node_position)
@@ -199,10 +225,10 @@ def connect_node_to_ball(
     rod_geom = rod.add_geom(
         type=mujoco.mjtGeom.mjGEOM_CYLINDER,
         fromto=[0.0, 0.0, 0.0, *rod_vector.tolist()],
-        size=[ROD_RADIUS],
+        size=[params.rod_radius],
         rgba=ROD_RGBA,
         material=ROD_MATERIAL,
-        mass=ROD_MASS,
+        mass=params.rod_mass,
     )
     disable_geom_contacts(rod_geom)
 
@@ -211,11 +237,11 @@ def connect_node_to_ball(
         trntype=mujoco.mjtTrn.mjTRN_JOINT,
         target=f"{instance_name}_z_hinge",
         ctrllimited=True,
-        ctrlrange=[-np.pi, np.pi],
+        ctrlrange=params.hinge_ctrl_range,
         forcelimited=True,
-        forcerange=HINGE_FORCE_RANGE,
+        forcerange=params.hinge_force_range,
     )
-    actuator.set_to_position(kp=HINGE_POSITION_KP)
+    actuator.set_to_position(kp=params.hinge_position_kp)
 
     constraint = spec.add_equality(
         name=f"connect_{instance_name}",
@@ -224,8 +250,8 @@ def connect_node_to_ball(
     )
     constraint.name1 = f"tip_site_{instance_name}"
     constraint.name2 = f"ball_site_{original_name}"
-    constraint.solref = [0.01, 1.0]
-    constraint.solimp = [0.95, 0.99, 0.001, 0.5, 2.0]
+    constraint.solref = params.connect_constraint_solref
+    constraint.solimp = params.connect_constraint_solimp
 
 
 def create_triangle_bodies(
@@ -238,10 +264,19 @@ def create_triangle_bodies(
     scale: float,
     *,
     realistic: bool = False,
+    physical_params: TrussPhysicalParameters | None = None,
 ) -> None:
     """Create triangle bodies and optionally connect shared vertices with connector balls."""
+    params = physical_params or TrussPhysicalParameters()
     connector_balls = (
-        create_connector_balls(spec, original_node_dict, node_instances, center, scale)
+        create_connector_balls(
+            spec,
+            original_node_dict,
+            node_instances,
+            center,
+            scale,
+            physical_params=params,
+        )
         if realistic
         else {}
     )
@@ -255,10 +290,10 @@ def create_triangle_bodies(
             name=f"tri_{triangle_name}", pos=positions[0].tolist()
         )
         triangle_body.quat = quaternion
-        triangle_body.gravcomp = 1.0
+        triangle_body.gravcomp = params.triangle_body_gravcomp
         triangle_body.explicitinertial = True
-        triangle_body.mass = TRIANGLE_BODY_MASS
-        triangle_body.inertia = [TRIANGLE_BODY_MASS] * 3
+        triangle_body.mass = params.triangle_body_mass
+        triangle_body.inertia = [params.triangle_body_mass] * 3
         triangle_body.add_freejoint()
 
         for index, instance_name in enumerate(node_names):
@@ -275,6 +310,8 @@ def create_triangle_bodies(
                 local_position=local_positions[index],
                 index=index,
                 connector_direction=connector_direction,
+                mass=_node_mass(instance_name, triangle_nodes, params),
+                box_size=params.box_size,
             )
 
             if not original_name or original_name not in connector_balls:
@@ -288,20 +325,35 @@ def create_triangle_bodies(
                 original_name=original_name,
                 node_dict=node_dict,
                 rotation_matrix=rotation_matrix,
+                physical_params=params,
             )
 
 
-def create_node_bodies(spec: mujoco.MjSpec, node_dict: NodeDict) -> None:
+def create_node_bodies(
+    spec: mujoco.MjSpec,
+    node_dict: NodeDict,
+    node_masses: dict[str, float] | None = None,
+    physical_params: TrussPhysicalParameters | None = None,
+) -> None:
     """Create the abstract per-node slide-joint model used by realistic=False."""
+    params = physical_params or TrussPhysicalParameters()
     for node_name, position in node_dict.items():
-        add_slide_node_body(spec, node_name=node_name, position=position)
+        add_slide_node_body(
+            spec,
+            node_name=node_name,
+            position=position,
+            mass=node_masses.get(node_name, params.active_node_mass)
+            if node_masses
+            else params.node_mass,
+            node_radius=params.node_radius,
+        )
 
 
 def build_world() -> mujoco.MjSpec:
     spec = mujoco.MjSpec.from_string(
-        """
+        f"""
 <mujoco>
-  <option integrator="implicitfast"/>
+  <option integrator="{MODEL_INTEGRATOR}"/>
   <visual>
     <global azimuth="120" elevation="-25"/>
     <headlight ambient="0.24 0.24 0.24"

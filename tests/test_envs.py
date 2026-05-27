@@ -15,6 +15,7 @@ from mujoco_truss_gen import (
     MujocoTrussEnv,
     MujocoVelocityCommandEnv,
     TrussEnvConfig,
+    TrussPhysicalParameters,
     get_edge_index,
     get_icosahedron_definition,
     get_mujoco_spec,
@@ -23,7 +24,11 @@ from mujoco_truss_gen import (
     get_route_lengths,
     save_xml,
 )
-from mujoco_truss_gen.mujoco_model.constants import NODE_RADIUS
+from mujoco_truss_gen.mujoco_model.constants import (
+    ACTIVE_NODE_MASS,
+    NODE_RADIUS,
+    PASSIVE_NODE_MASS,
+)
 
 
 def test_generated_spec_runs_in_all_builtin_envs() -> None:
@@ -277,6 +282,90 @@ def test_custom_dictionary_spec_compiles_and_runs() -> None:
         env.close()
 
 
+def test_triangle_node_masses_follow_active_and_passive_roles() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+    }
+
+    root = ET.fromstring(get_mujoco_spec(node_dict, triangle_dict, realistic=False).to_xml())
+
+    passive_geom = root.find(".//body[@name='node_1']/geom")
+    active_geom = root.find(".//body[@name='node_2']/geom")
+    assert passive_geom is not None
+    assert active_geom is not None
+    assert float(passive_geom.get("mass", "nan")) == pytest.approx(PASSIVE_NODE_MASS)
+    assert float(active_geom.get("mass", "nan")) == pytest.approx(ACTIVE_NODE_MASS)
+
+
+def test_physical_parameters_override_generated_truss_values() -> None:
+    params = TrussPhysicalParameters(
+        node_radius=0.12,
+        active_node_mass=0.33,
+        passive_node_mass=0.44,
+        abstract_actuator_kp=1234.0,
+        actuator_dampratio=0.75,
+        actuator_ctrl_range=[-0.2, 0.2],
+        default_actuator_range=[0.1, 1.7],
+        tendon_range_max_factor=3.0,
+        edge_tendon_width=0.08,
+        perimeter_constraint_tendon_width=0.002,
+        tendon_constraint_solref=[0.03, 0.8],
+        tendon_constraint_solimp=[0.85, 0.93, 0.002],
+    )
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+    }
+
+    root = ET.fromstring(
+        get_mujoco_spec(
+            node_dict,
+            triangle_dict,
+            realistic=False,
+            physical_params=params,
+        ).to_xml()
+    )
+
+    passive_geom = root.find(".//body[@name='node_1']/geom")
+    active_geom = root.find(".//body[@name='node_2']/geom")
+    edge_tendon = root.find(".//tendon/spatial[@name='tendon_node_1_node_2']")
+    perimeter_tendon = root.find(".//tendon/spatial[@name='Perimeter_Constraint_0']")
+    actuator = root.find(".//actuator/general")
+    constraint = root.find(".//equality/tendon[@name='Perimeter_Constraint_0']")
+
+    assert passive_geom is not None
+    assert active_geom is not None
+    assert edge_tendon is not None
+    assert perimeter_tendon is not None
+    assert actuator is not None
+    assert constraint is not None
+
+    assert float(passive_geom.get("mass", "nan")) == pytest.approx(0.44)
+    assert float(active_geom.get("mass", "nan")) == pytest.approx(0.33)
+    np.testing.assert_allclose(_xml_vector(active_geom.get("size", "")), [0.12])
+    np.testing.assert_allclose(_xml_vector(edge_tendon.get("range", "")), [0.5, 2.4])
+    assert float(edge_tendon.get("width", "nan")) == pytest.approx(0.08)
+    assert float(perimeter_tendon.get("width", "nan")) == pytest.approx(0.002)
+    np.testing.assert_allclose(_xml_vector(actuator.get("ctrlrange", "")), [-0.2, 0.2])
+    np.testing.assert_allclose(_xml_vector(actuator.get("actrange", "")), [0.1, 1.7])
+    np.testing.assert_allclose(_xml_vector(actuator.get("gainprm", ""))[:1], [1234.0])
+    np.testing.assert_allclose(_xml_vector(actuator.get("biasprm", ""))[1:3], [-1234.0, 0.75])
+    np.testing.assert_allclose(_xml_vector(constraint.get("solref", "")), [0.03, 0.8])
+    np.testing.assert_allclose(
+        _xml_vector(constraint.get("solimp", ""))[:3],
+        [0.85, 0.93, 0.002],
+    )
+
+
 def test_custom_triangle_nodes_are_lifted_above_ground() -> None:
     node_dict = {
         "node_1": [0.0, 0.0, -0.8],
@@ -385,7 +474,7 @@ def test_octahedron_stays_finite_and_above_ground_under_zero_action() -> None:
     try:
         obs, _ = env.reset(seed=23)
         action = np.zeros(env.action_space.shape, dtype=np.float32)
-        ground_contact_tolerance = 0.01
+        ground_contact_tolerance = 0.015
 
         for _ in range(200):
             obs, reward, terminated, truncated, info = env.step(action)

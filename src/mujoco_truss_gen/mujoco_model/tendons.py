@@ -3,7 +3,11 @@ from __future__ import annotations
 import mujoco
 import numpy as np
 
-from mujoco_truss_gen.mujoco_model.constants import TENDON_MATERIAL, TENDON_RGBA
+from mujoco_truss_gen.mujoco_model.constants import (
+    TENDON_MATERIAL,
+    TENDON_RGBA,
+    TrussPhysicalParameters,
+)
 from mujoco_truss_gen.mujoco_model.model_types import EdgeKey, EdgeTendonMap
 
 
@@ -37,12 +41,14 @@ def add_tendon(
     to_node_name: str,
     *,
     tendon_range: list[float] | tuple[float, float] | None = None,
+    physical_params: TrussPhysicalParameters | None = None,
 ) -> str:
+    params = physical_params or TrussPhysicalParameters()
     tendon_name = f"tendon_{from_node_name}_{to_node_name}"
     tendon = spec.add_tendon(
         name=tendon_name,
-        range=tendon_range if tendon_range is not None else [0.5, 2.0],
-        width=0.05,
+        range=tendon_range if tendon_range is not None else params.default_edge_tendon_range,
+        width=params.edge_tendon_width,
         rgba=TENDON_RGBA,
         material=TENDON_MATERIAL,
     )
@@ -57,12 +63,14 @@ def add_route_tendon(
     route: list[str],
     *,
     tendon_range: list[float] | tuple[float, float] | None = None,
+    physical_params: TrussPhysicalParameters | None = None,
 ) -> str:
+    params = physical_params or TrussPhysicalParameters()
     tendon_name = f"route_{route_name}"
     tendon = spec.add_tendon(
         name=tendon_name,
-        range=tendon_range if tendon_range is not None else [0.5, 10.0],
-        width=0.02,
+        range=tendon_range if tendon_range is not None else params.default_route_tendon_range,
+        width=params.route_tendon_width,
         rgba=TENDON_RGBA,
         material=TENDON_MATERIAL,
     )
@@ -78,6 +86,7 @@ def add_edge_tendon(
     to_node_name: str,
     *,
     tendon_range: list[float] | tuple[float, float] | None = None,
+    physical_params: TrussPhysicalParameters | None = None,
 ) -> str:
     key = edge_key(from_node_name, to_node_name)
     if key not in edge_tendons:
@@ -86,6 +95,7 @@ def add_edge_tendon(
             from_node_name,
             to_node_name,
             tendon_range=tendon_range,
+            physical_params=physical_params,
         )
     return edge_tendons[key]
 
@@ -109,16 +119,18 @@ def add_actuator(
     used_names: set[str] | None = None,
     *,
     actrange: list[float] | tuple[float, float] | None = None,
+    physical_params: TrussPhysicalParameters | None = None,
 ) -> None:
+    params = physical_params or TrussPhysicalParameters()
     actuator_name = unique_actuator_name(tendon_name, used_names)
     actuator = spec.add_actuator(
         name=actuator_name,
         trntype=mujoco.mjtTrn.mjTRN_TENDON,
         target=tendon_name,
         ctrllimited=True,
-        ctrlrange=[-0.05, 0.05],
+        ctrlrange=params.actuator_ctrl_range,
         actlimited=True,
-        actrange=actrange if actrange is not None else [0.0, 3.0],
+        actrange=actrange if actrange is not None else params.default_actuator_range,
     )
     if used_names is not None:
         used_names.add(actuator_name)
@@ -131,16 +143,19 @@ def add_realistic_actuator(
     kp: float,
     dampratio: float,
     used_names: set[str] | None = None,
+    *,
+    physical_params: TrussPhysicalParameters | None = None,
 ) -> None:
+    params = physical_params or TrussPhysicalParameters()
     actuator_name = unique_actuator_name(tendon_name, used_names)
     actuator = spec.add_actuator(
         name=actuator_name,
         trntype=mujoco.mjtTrn.mjTRN_TENDON,
         target=tendon_name,
         ctrllimited=True,
-        ctrlrange=[-0.05, 0.05],
+        ctrlrange=params.actuator_ctrl_range,
         actlimited=True,
-        actrange=[0.0, 3.0],
+        actrange=params.default_actuator_range,
     )
     if used_names is not None:
         used_names.add(actuator_name)
@@ -148,8 +163,7 @@ def add_realistic_actuator(
     actuator.gaintype = mujoco.mjtGain.mjGAIN_FIXED
     actuator.biastype = mujoco.mjtBias.mjBIAS_AFFINE
 
-    nominal_mass = 1.0
-    kv = 2.0 * dampratio * np.sqrt(kp * nominal_mass)
+    kv = 2.0 * dampratio * np.sqrt(kp * params.realistic_actuator_nominal_mass)
     actuator.gainprm[0] = kp
     actuator.biasprm[1] = -kp
     actuator.biasprm[2] = -kv

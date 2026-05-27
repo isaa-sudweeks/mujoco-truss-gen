@@ -13,6 +13,7 @@ from mujoco_truss_gen.mujoco_model.builders import (
     build_triangle,
     get_mujoco_spec,
 )
+from mujoco_truss_gen.mujoco_model.constants import TrussPhysicalParameters
 from mujoco_truss_gen.mujoco_model.geometry import get_perimeter, get_route_lengths
 from mujoco_truss_gen.mujoco_model.gnn_utilities import get_edge_index, get_node_features
 from mujoco_truss_gen.mujoco_model.io_viewer import save_xml, view
@@ -34,6 +35,7 @@ __all__ = [
     "DEFAULT_ACCELEROMETER_CONFIG",
     "MujocoModel",
     "PRESETS",
+    "TrussPhysicalParameters",
     "build_abstract_shapes",
     "build_abstract_triangle",
     "build_realistic_triangle",

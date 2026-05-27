@@ -10,7 +10,11 @@ from mujoco_truss_gen.mujoco_model.bodies import (
     create_node_bodies,
     create_triangle_bodies,
 )
-from mujoco_truss_gen.mujoco_model.constants import MIN_NODE_CENTER_Z
+from mujoco_truss_gen.mujoco_model.constants import (
+    MIN_NODE_CENTER_Z,
+    REALISTIC_NODE_CLONE_OFFSET,
+    TrussPhysicalParameters,
+)
 from mujoco_truss_gen.mujoco_model.constraints import (
     add_perimeter_constraint,
     add_route_length_constraints,
@@ -38,17 +42,14 @@ from mujoco_truss_gen.mujoco_model.tendons import (
 
 STL_SOURCE_METADATA_KEY = "_mujoco_truss_gen_source"
 STL_SOURCE_METADATA_VALUE = "stl"
-TENDON_RANGE_MIN_FACTOR = 0.5
-TENDON_RANGE_MAX_FACTOR = 2.0
-ACTUATOR_RANGE_MIN_FACTOR = 0.0
-ACTUATOR_RANGE_MAX_FACTOR = 3.0
 _DEFAULT_ACCELEROMETER_CONFIG = object()
 
 
 def clone_shared_nodes(
     node_dict: NodeDict,
     triangle_dict: TriangleDict,
-    clone_offset: float = 0.5,
+    clone_offset: float = REALISTIC_NODE_CLONE_OFFSET,
+    min_node_center_z: float = MIN_NODE_CENTER_Z,
 ) -> tuple[dict[str, np.ndarray], dict[str, list[str]], np.ndarray, float]:
     """Clone shared nodes so each triangle has independent planar node bodies.
 
@@ -100,7 +101,7 @@ def clone_shared_nodes(
         ball_z = center[2] + scale * (original_position[2] - center[2])
         min_z = min(min_z, float(ball_z))
 
-    z_offset = max(0.0, MIN_NODE_CENTER_Z - min_z)
+    z_offset = max(0.0, min_node_center_z - min_z)
     if z_offset > 0.0:
         center[2] += z_offset
         for position in original_node_dict.values():
@@ -117,11 +118,13 @@ def build_abstract_triangle(
     spec: mujoco.MjSpec,
     node_dict_or_triangle_dict: NodeDict | TriangleDict,
     triangle_dict: TriangleDict | None = None,
+    *,
+    physical_params: TrussPhysicalParameters | None = None,
 ) -> None:
+    params = physical_params or TrussPhysicalParameters()
     node_dict = node_dict_or_triangle_dict if triangle_dict is not None else None
     if triangle_dict is None:
         triangle_dict = node_dict_or_triangle_dict
-
     actuator_names: set[str] = set()
     for triangle_nodes in triangle_dict.values():
         nodes = triangle_nodes[:3]
@@ -135,11 +138,13 @@ def build_abstract_triangle(
                 to_node_name=to_node,
                 tendon_range=(
                     _upper_scaled_tendon_range(
-                        _distance_between_nodes(node_dict, from_node, to_node)
+                        _distance_between_nodes(node_dict, from_node, to_node),
+                        params,
                     )
                     if node_dict is not None
                     else None
                 ),
+                physical_params=params,
             )
 
         for index, from_node in enumerate(nodes):
@@ -148,15 +153,22 @@ def build_abstract_triangle(
                 add_actuator(
                     spec,
                     tendon_name=f"tendon_{from_node}_{to_node}",
-                    kp=5000.0,
-                    dampratio=1.0,
+                    kp=params.abstract_actuator_kp,
+                    dampratio=params.actuator_dampratio,
                     used_names=actuator_names,
+                    physical_params=params,
                 )
 
-    add_perimeter_constraint(spec, triangle_dict)
+    add_perimeter_constraint(spec, triangle_dict, physical_params=params)
 
 
-def build_realistic_triangle(spec: mujoco.MjSpec, triangle_dict: TriangleDict) -> None:
+def build_realistic_triangle(
+    spec: mujoco.MjSpec,
+    triangle_dict: TriangleDict,
+    *,
+    physical_params: TrussPhysicalParameters | None = None,
+) -> None:
+    params = physical_params or TrussPhysicalParameters()
     edge_tendons: EdgeTendonMap = {}
     actuated_tendons: set[str] = set()
     actuator_names: set[str] = set()
@@ -167,7 +179,13 @@ def build_realistic_triangle(spec: mujoco.MjSpec, triangle_dict: TriangleDict) -
 
         for index, from_node in enumerate(nodes):
             to_node = nodes[(index + 1) % 3]
-            add_edge_tendon(spec, edge_tendons, from_node, to_node)
+            add_edge_tendon(
+                spec,
+                edge_tendons,
+                from_node,
+                to_node,
+                physical_params=params,
+            )
 
         for index, from_node in enumerate(nodes):
             to_node = nodes[(index + 1) % 3]
@@ -178,24 +196,28 @@ def build_realistic_triangle(spec: mujoco.MjSpec, triangle_dict: TriangleDict) -
                 add_realistic_actuator(
                     spec,
                     tendon_name=tendon_name,
-                    kp=1000.0,
-                    dampratio=1.0,
+                    kp=params.realistic_actuator_kp,
+                    dampratio=params.actuator_dampratio,
                     used_names=actuator_names,
+                    physical_params=params,
                 )
                 actuated_tendons.add(tendon_name)
 
-    add_perimeter_constraint(spec, triangle_dict, edge_tendons)
+    add_perimeter_constraint(spec, triangle_dict, edge_tendons, physical_params=params)
 
 
 def build_abstract_shapes(
     spec: mujoco.MjSpec,
     node_dict: NodeDict,
     shape_dict: ShapeDict,
+    *,
+    physical_params: TrussPhysicalParameters | None = None,
 ) -> None:
+    params = physical_params or TrussPhysicalParameters()
     shape_dict = _copy_shape_dict(shape_dict)
     _validate_shape_dict(node_dict, shape_dict)
 
-    create_node_bodies(spec, node_dict)
+    create_node_bodies(spec, node_dict, physical_params=params)
 
     edge_tendons: EdgeTendonMap = {}
     route_tendons = {}
@@ -213,10 +235,11 @@ def build_abstract_shapes(
                 from_node,
                 to_node,
                 tendon_range=(
-                    _scaled_tendon_range(edge_length)
+                    _scaled_tendon_range(edge_length, params)
                     if scale_limits_to_geometry
                     else None
                 ),
+                physical_params=params,
             )
 
         for from_node, to_node in shape["active_edges"]:
@@ -227,14 +250,15 @@ def build_abstract_shapes(
             add_actuator(
                 spec,
                 tendon_name=tendon_name,
-                kp=5000.0,
-                dampratio=1.0,
+                kp=params.abstract_actuator_kp,
+                dampratio=params.actuator_dampratio,
                 used_names=actuator_names,
                 actrange=(
-                    _scaled_actuator_range(edge_length)
+                    _scaled_actuator_range(edge_length, params)
                     if scale_limits_to_geometry
                     else None
                 ),
+                physical_params=params,
             )
             actuated_tendons.add(tendon_name)
 
@@ -243,16 +267,18 @@ def build_abstract_shapes(
             shape_name,
             route,
             tendon_range=(
-                _scaled_tendon_range(_route_length(node_dict, route))
+                _scaled_tendon_range(_route_length(node_dict, route), params)
                 if scale_limits_to_geometry
                 else None
             ),
+            physical_params=params,
         )
 
     add_route_length_constraints(
         spec,
         shape_dict,
         route_tendons,
+        physical_params=params,
     )
 
 
@@ -262,10 +288,12 @@ def build_triangle(
     triangle_dict: TriangleDict,
     *,
     realistic: bool = False,
+    physical_params: TrussPhysicalParameters | None = None,
     accelerometer_config: AccelerometerConfig | dict[str, Any] | None | object = (
         _DEFAULT_ACCELEROMETER_CONFIG
     ),
 ) -> None:
+    params = physical_params or TrussPhysicalParameters()
     _validate_node_dict(node_dict)
     _validate_triangle_dict(node_dict, triangle_dict)
     node_dict = _copy_node_dict(node_dict)
@@ -275,6 +303,8 @@ def build_triangle(
         original_node_dict, node_instances, center, scale = clone_shared_nodes(
             node_dict,
             triangle_dict,
+            clone_offset=params.realistic_node_clone_offset,
+            min_node_center_z=params.min_node_center_z,
         )
         create_triangle_bodies(
             spec,
@@ -285,6 +315,7 @@ def build_triangle(
             center,
             scale,
             realistic=True,
+            physical_params=params,
         )
         add_node_accelerometers(
             spec,
@@ -296,12 +327,17 @@ def build_triangle(
             ),
         )
     else:
-        _lift_nodes_above_ground(node_dict)
-        create_node_bodies(spec, node_dict)
-        build_abstract_triangle(spec, node_dict, triangle_dict)
+        _lift_nodes_above_ground(node_dict, params)
+        create_node_bodies(
+            spec,
+            node_dict,
+            _triangle_node_masses(triangle_dict, params),
+            physical_params=params,
+        )
+        build_abstract_triangle(spec, node_dict, triangle_dict, physical_params=params)
         return
 
-    build_realistic_triangle(spec, triangle_dict)
+    build_realistic_triangle(spec, triangle_dict, physical_params=params)
 
 
 def build_shapes(
@@ -310,7 +346,9 @@ def build_shapes(
     shape_dict: ShapeDict,
     *,
     realistic: bool = False,
+    physical_params: TrussPhysicalParameters | None = None,
 ) -> None:
+    params = physical_params or TrussPhysicalParameters()
     if realistic:
         raise NotImplementedError(
             "Routed shape dictionaries are only supported with realistic=False."
@@ -318,8 +356,8 @@ def build_shapes(
 
     _validate_node_dict(node_dict)
     node_dict = _copy_node_dict(node_dict)
-    _lift_nodes_above_ground(node_dict)
-    build_abstract_shapes(spec, node_dict, shape_dict)
+    _lift_nodes_above_ground(node_dict, params)
+    build_abstract_shapes(spec, node_dict, shape_dict, physical_params=params)
 
 
 def _copy_node_dict(node_dict: NodeDict) -> NodeDict:
@@ -347,9 +385,12 @@ def _copy_shape_dict(shape_dict: ShapeDict) -> ShapeDict:
     return copied
 
 
-def _lift_nodes_above_ground(node_dict: NodeDict) -> None:
+def _lift_nodes_above_ground(
+    node_dict: NodeDict,
+    physical_params: TrussPhysicalParameters,
+) -> None:
     min_z = min(float(position[2]) for position in node_dict.values())
-    z_offset = max(0.0, MIN_NODE_CENTER_Z - min_z)
+    z_offset = max(0.0, physical_params.min_node_center_z - min_z)
     if z_offset == 0.0:
         return
 
@@ -374,30 +415,51 @@ def _route_length(node_dict: NodeDict, route: list[str]) -> float:
     )
 
 
-def _scaled_tendon_range(length: float) -> list[float]:
+def _triangle_node_masses(
+    triangle_dict: TriangleDict,
+    physical_params: TrussPhysicalParameters,
+) -> dict[str, float]:
+    node_masses: dict[str, float] = {}
+    for triangle_nodes in triangle_dict.values():
+        for node in triangle_nodes[:3]:
+            node_masses.setdefault(node, physical_params.active_node_mass)
+        node_masses[triangle_nodes[3]] = physical_params.passive_node_mass
+    return node_masses
+
+
+def _scaled_tendon_range(
+    length: float,
+    physical_params: TrussPhysicalParameters,
+) -> list[float]:
     if length <= 0.0:
         raise ValueError("Cannot scale tendon limits for a zero-length edge.")
     return [
-        length * TENDON_RANGE_MIN_FACTOR,
-        length * TENDON_RANGE_MAX_FACTOR,
+        length * physical_params.tendon_range_min_factor,
+        length * physical_params.tendon_range_max_factor,
     ]
 
 
-def _upper_scaled_tendon_range(length: float) -> list[float]:
+def _upper_scaled_tendon_range(
+    length: float,
+    physical_params: TrussPhysicalParameters,
+) -> list[float]:
     if length <= 0.0:
         raise ValueError("Cannot scale tendon limits for a zero-length edge.")
     return [
         0.5,
-        length * TENDON_RANGE_MAX_FACTOR,
+        length * physical_params.tendon_range_max_factor,
     ]
 
 
-def _scaled_actuator_range(length: float) -> list[float]:
+def _scaled_actuator_range(
+    length: float,
+    physical_params: TrussPhysicalParameters,
+) -> list[float]:
     if length <= 0.0:
         raise ValueError("Cannot scale actuator limits for a zero-length STL route edge.")
     return [
-        length * ACTUATOR_RANGE_MIN_FACTOR,
-        length * ACTUATOR_RANGE_MAX_FACTOR,
+        length * physical_params.actuator_range_min_factor,
+        length * physical_params.actuator_range_max_factor,
     ]
 
 
@@ -513,6 +575,7 @@ def get_mujoco_spec(
     *args: Any,
     realistic: bool = False,
     scale: float = 1.0,
+    physical_params: TrussPhysicalParameters | None = None,
     accelerometer_config: AccelerometerConfig | dict[str, Any] | None | object = (
         _DEFAULT_ACCELEROMETER_CONFIG
     ),
@@ -522,6 +585,7 @@ def get_mujoco_spec(
         unexpected = ", ".join(kwargs)
         raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
 
+    params = physical_params or TrussPhysicalParameters()
     spec = build_world()
     if len(args) == 2:
         if scale != 1.0:
@@ -538,13 +602,20 @@ def get_mujoco_spec(
     if isinstance(structure_dict, dict) and _looks_like_shape_dict(structure_dict):
         if accelerometer_config is not _DEFAULT_ACCELEROMETER_CONFIG:
             raise ValueError("accelerometer_config is only supported with triangle models.")
-        build_shapes(spec, node_dict, structure_dict, realistic=realistic)
+        build_shapes(
+            spec,
+            node_dict,
+            structure_dict,
+            realistic=realistic,
+            physical_params=params,
+        )
     else:
         build_triangle(
             spec,
             node_dict,
             structure_dict,
             realistic=realistic,
+            physical_params=params,
             accelerometer_config=accelerometer_config,
         )
     return spec
