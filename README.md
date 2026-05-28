@@ -103,6 +103,13 @@ python -m mujoco_truss_gen.generate_mujoco_model
 On macOS, MuJoCo's passive viewer may require running viewer scripts with
 `mjpython` instead of the standard `python` executable.
 
+Routed continuous-tube presets such as `tetrahedron` are unconstrained
+all-edge-actuated models. Use `MujocoNodeVelocityCommandEnv` for node-level
+scalar velocity commands that are mapped through the route incidence matrix to
+edge actuator commands. For manual testing, `view_node_velocity_terminal(spec)`
+opens the MuJoCo viewer and accepts terminal commands such as
+`set node_2 0.01`, `show`, `zero`, and `quit`.
+
 ## Documentation
 
 - [Model generation](docs/model-generation.md): custom trusses, routed shape

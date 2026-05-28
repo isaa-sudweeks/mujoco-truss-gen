@@ -17,7 +17,6 @@ from mujoco_truss_gen.mujoco_model.constants import (
 )
 from mujoco_truss_gen.mujoco_model.constraints import (
     add_perimeter_constraint,
-    add_route_length_constraints,
 )
 from mujoco_truss_gen.mujoco_model.model_types import (
     EdgeTendonMap,
@@ -220,7 +219,6 @@ def build_abstract_shapes(
     create_node_bodies(spec, node_dict, physical_params=params)
 
     edge_tendons: EdgeTendonMap = {}
-    route_tendons = {}
     actuated_tendons: set[str] = set()
     actuator_names: set[str] = set()
 
@@ -229,7 +227,7 @@ def build_abstract_shapes(
         scale_limits_to_geometry = _is_stl_imported_shape(shape)
         for from_node, to_node in zip(route, route[1:], strict=False):
             edge_length = _distance_between_nodes(node_dict, from_node, to_node)
-            add_edge_tendon(
+            tendon_name = add_edge_tendon(
                 spec,
                 edge_tendons,
                 from_node,
@@ -241,12 +239,8 @@ def build_abstract_shapes(
                 ),
                 physical_params=params,
             )
-
-        for from_node, to_node in shape["active_edges"]:
-            tendon_name = edge_tendons[edge_key(from_node, to_node)]
             if tendon_name in actuated_tendons:
                 continue
-            edge_length = _distance_between_nodes(node_dict, from_node, to_node)
             add_actuator(
                 spec,
                 tendon_name=tendon_name,
@@ -262,7 +256,7 @@ def build_abstract_shapes(
             )
             actuated_tendons.add(tendon_name)
 
-        route_tendons[shape_name] = add_route_tendon(
+        add_route_tendon(
             spec,
             shape_name,
             route,
@@ -273,13 +267,6 @@ def build_abstract_shapes(
             ),
             physical_params=params,
         )
-
-    add_route_length_constraints(
-        spec,
-        shape_dict,
-        route_tendons,
-        physical_params=params,
-    )
 
 
 def build_triangle(

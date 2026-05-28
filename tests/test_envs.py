@@ -11,9 +11,11 @@ from mujoco_truss_gen import (
     PRESETS,
     AccelerometerConfig,
     MujocoModel,
+    MujocoNodeVelocityCommandEnv,
     MujocoRelativeObsEnv,
     MujocoTrussEnv,
     MujocoVelocityCommandEnv,
+    NodeVelocityController,
     TrussEnvConfig,
     TrussPhysicalParameters,
     get_edge_index,
@@ -28,6 +30,10 @@ from mujoco_truss_gen.mujoco_model.constants import (
     ACTIVE_NODE_MASS,
     NODE_RADIUS,
     PASSIVE_NODE_MASS,
+)
+from mujoco_truss_gen.mujoco_model.io_viewer import (
+    NodeVelocityViewerState,
+    _apply_terminal_command,
 )
 
 
@@ -664,12 +670,19 @@ def test_routed_shape_spec_compiles_and_runs() -> None:
     assert get_route_lengths(node_dict, shape_dict) == {"quad_1": 3.2}
     spec = get_mujoco_spec(node_dict, shape_dict, realistic=False)
     assert get_edge_index(spec).shape == (2, 8)
+    root = ET.fromstring(spec.to_xml())
+    assert root.find(".//equality/tendon[@name='Route_Length_Constraint_quad_1']") is None
+    actuator_names = {
+        actuator.get("name")
+        for actuator in root.findall(".//actuator/general")
+    }
+    assert actuator_names == {"act_12", "act_23", "act_34", "act_14"}
 
     env = MujocoTrussEnv(TrussEnvConfig(spec, max_steps=2, nsubsteps=1, speed=0.01))
     try:
         obs, _ = env.reset(seed=13)
         assert env.observation_space.contains(obs)
-        assert env.action_space.shape == (2,)
+        assert env.action_space.shape == (4,)
 
         action = np.zeros(env.action_space.shape, dtype=np.float32)
         obs, _, _, _, info = env.step(action)
@@ -678,6 +691,187 @@ def test_routed_shape_spec_compiles_and_runs() -> None:
         assert "critical_eig" in info
     finally:
         env.close()
+
+
+def test_node_velocity_controller_maps_node_commands_to_edge_commands() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [1.0, 0.0, 0.2],
+        "node_3": [2.0, 0.0, 0.2],
+    }
+    shape_dict = {
+        "path_1": {
+            "route": ["node_1", "node_2", "node_3"],
+            "active_edges": [["node_1", "node_2"]],
+        },
+    }
+    model = MujocoModel(get_mujoco_spec(node_dict, shape_dict, realistic=False))
+    controller = NodeVelocityController(
+        model.model,
+        model.xml,
+        model.node_names,
+        model.site_to_node,
+        model.external_actuator_ids,
+    )
+
+    np.testing.assert_array_equal(controller.passive_node_names, ["node_1", "node_3"])
+    np.testing.assert_allclose(
+        controller.incidence_matrix,
+        np.array([[-1.0, 1.0, 0.0], [0.0, -1.0, 1.0]]),
+    )
+
+    edge_commands = controller.transform(np.array([1.0, 2.0, 3.0]))
+
+    np.testing.assert_allclose(controller.latest_node_commands, [0.0, 2.0, 0.0])
+    np.testing.assert_allclose(edge_commands, [2.0, -2.0])
+
+
+def test_node_velocity_controller_clips_edge_commands() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [1.0, 0.0, 0.2],
+        "node_3": [2.0, 0.0, 0.2],
+    }
+    shape_dict = {
+        "path_1": {
+            "route": ["node_1", "node_2", "node_3"],
+            "active_edges": [["node_1", "node_2"]],
+        },
+    }
+    model = MujocoModel(get_mujoco_spec(node_dict, shape_dict, realistic=False))
+    controller = NodeVelocityController(
+        model.model,
+        model.xml,
+        model.node_names,
+        model.site_to_node,
+        model.external_actuator_ids,
+    )
+
+    np.testing.assert_allclose(
+        controller.clipped_edge_commands(model.model, np.array([0.0, 2.0, 0.0])),
+        [0.05, -0.05],
+    )
+
+
+def test_node_velocity_controller_uses_first_conflicting_route_orientation() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [1.0, 0.0, 0.2],
+    }
+    shape_dict = {
+        "path_1": {
+            "route": ["node_1", "node_2"],
+            "active_edges": [["node_1", "node_2"]],
+        },
+        "path_2": {
+            "route": ["node_2", "node_1"],
+            "active_edges": [["node_2", "node_1"]],
+        },
+    }
+    model = MujocoModel(get_mujoco_spec(node_dict, shape_dict, realistic=False))
+    controller = NodeVelocityController(
+        model.model,
+        model.xml,
+        model.node_names,
+        model.site_to_node,
+        model.external_actuator_ids,
+    )
+
+    assert [(edge.from_node, edge.to_node) for edge in controller.edges] == [
+        ("node_1", "node_2")
+    ]
+
+
+def test_node_velocity_command_env_steps_with_node_actions() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [1.0, 0.0, 0.2],
+        "node_3": [2.0, 0.0, 0.2],
+    }
+    shape_dict = {
+        "path_1": {
+            "route": ["node_1", "node_2", "node_3"],
+            "active_edges": [["node_1", "node_2"]],
+        },
+    }
+    env = MujocoNodeVelocityCommandEnv(
+        TrussEnvConfig(
+            get_mujoco_spec(node_dict, shape_dict, realistic=False),
+            max_steps=2,
+            nsubsteps=1,
+            speed=0.01,
+        )
+    )
+    try:
+        obs, _ = env.reset(seed=13)
+        assert env.observation_space.contains(obs)
+        assert env.action_space.shape == (3,)
+
+        action = np.array([0.01, 0.02, 0.03], dtype=np.float32)
+        obs, _, _, _, info = env.step(action)
+
+        assert env.observation_space.contains(obs)
+        assert "critical_eig" in info
+        np.testing.assert_allclose(
+            env.node_velocity_controller.latest_node_commands,
+            [0.0, 0.01, 0.0],
+        )
+        np.testing.assert_allclose(env.mj_model.get_external_ctrl(), [0.01, -0.01])
+    finally:
+        env.close()
+
+
+def test_node_velocity_viewer_state_tracks_sliders_and_tendon_readouts() -> None:
+    state = NodeVelocityViewerState(
+        ["node_1", "node_2"],
+        ["tendon_node_1_node_2"],
+        ["node_1"],
+        speed=0.01,
+    )
+
+    state.set_node_command("node_1", 0.01)
+    state.set_node_command("node_2", 0.02)
+    state.set_edge_commands(np.array([0.015]))
+
+    np.testing.assert_allclose(state.node_commands, [0.0, 0.01])
+    np.testing.assert_allclose(state.edge_commands, [0.015])
+
+
+def test_node_velocity_terminal_commands_update_node_commands() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [1.0, 0.0, 0.2],
+        "node_3": [2.0, 0.0, 0.2],
+    }
+    shape_dict = {
+        "path_1": {
+            "route": ["node_1", "node_2", "node_3"],
+            "active_edges": [["node_1", "node_2"]],
+        },
+    }
+    model = MujocoModel(get_mujoco_spec(node_dict, shape_dict, realistic=False))
+    controller = NodeVelocityController(
+        model.model,
+        model.xml,
+        model.node_names,
+        model.site_to_node,
+        model.external_actuator_ids,
+    )
+    node_commands = np.zeros(len(controller.node_names), dtype=float)
+
+    assert not _apply_terminal_command("set node_2 0.02", controller, node_commands, 0.01)
+    np.testing.assert_allclose(node_commands, [0.0, 0.01, 0.0])
+    np.testing.assert_allclose(controller.latest_edge_commands, [0.01, -0.01])
+
+    assert not _apply_terminal_command("add 1 -0.005", controller, node_commands, 0.01)
+    np.testing.assert_allclose(node_commands, [0.0, 0.005, 0.0])
+
+    assert not _apply_terminal_command("set node_1 0.01", controller, node_commands, 0.01)
+    np.testing.assert_allclose(node_commands, [0.0, 0.005, 0.0])
+
+    assert not _apply_terminal_command("zero", controller, node_commands, 0.01)
+    np.testing.assert_allclose(node_commands, [0.0, 0.0, 0.0])
+    assert _apply_terminal_command("quit", controller, node_commands, 0.01)
 
 
 def test_realistic_logical_gnn_edge_index_matches_abstract_graph() -> None:
@@ -775,15 +969,14 @@ def test_routed_shape_generation_does_not_mutate_custom_dictionaries() -> None:
     assert shape_dict == original_shapes
 
 
-def test_tetrahedron_route_constraints_start_satisfied() -> None:
+def test_tetrahedron_routed_shape_has_no_route_constraints() -> None:
     spec = get_mujoco_spec("tetrahedron", realistic=False)
     model = spec.compile()
     data = mujoco.MjData(model)
 
     mujoco.mj_forward(model, data)
 
-    assert data.nefc >= 2
-    np.testing.assert_allclose(data.efc_pos[:2], [0.0, 0.0], atol=1e-8)
+    assert data.nefc == 0
 
 
 def test_actuator_names_are_edge_based() -> None:
@@ -791,7 +984,7 @@ def test_actuator_names_are_edge_based() -> None:
 
     actuator_names = {model.actuator(index).name for index in range(model.nu)}
 
-    assert actuator_names == {"act_12", "act_34", "act_23", "act_14"}
+    assert actuator_names == {"act_12", "act_24", "act_34", "act_23", "act_13", "act_14"}
 
 
 def _unit(vector: np.ndarray) -> np.ndarray:

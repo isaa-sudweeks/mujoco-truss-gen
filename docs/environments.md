@@ -21,6 +21,8 @@ Environment constructors accept any of these model sources:
   actuator delta actions.
 - `MujocoVelocityCommandEnv`: relative observations with direct velocity command
   actions.
+- `MujocoNodeVelocityCommandEnv`: relative observations with routed-tube
+  node-level scalar velocity commands mapped to edge actuators.
 
 ## Shared Configuration
 
@@ -64,6 +66,31 @@ config = TrussEnvConfig(
   changes the previous control by `action * config.speed`.
 - `MujocoVelocityCommandEnv` expects actions in `[-config.speed, config.speed]`
   and sends those values directly.
+- `MujocoNodeVelocityCommandEnv` expects one scalar per model node in
+  `[-config.speed, config.speed]`. Nodes that are the start or end of any route
+  are passive and are zeroed before control is applied. The environment
+  multiplies the effective node command vector by the routed-tube oriented
+  incidence matrix, where each edge command is
+  `node_action[to_node] - node_action[from_node]`, then clips the result to the
+  MuJoCo actuator control range.
+
+```python
+import numpy as np
+
+from mujoco_truss_gen import (
+    MujocoNodeVelocityCommandEnv,
+    TrussEnvConfig,
+    get_mujoco_spec,
+)
+
+spec = get_mujoco_spec("tetrahedron", realistic=False)
+env = MujocoNodeVelocityCommandEnv(TrussEnvConfig(spec, speed=0.01))
+obs, _ = env.reset(seed=1)
+
+action = np.zeros(env.action_space.shape, dtype=np.float32)
+action[1] = 0.01
+obs, reward, terminated, truncated, info = env.step(action)
+```
 
 ## Rewards
 
@@ -80,3 +107,33 @@ Custom tasks should subclass an environment and override `_get_obs()`,
 - `render_mode="rgb_array"` returns a rendered NumPy RGB image.
 - `render_mode="human"` opens a passive MuJoCo viewer when the local MuJoCo
   viewer module is available.
+- `view(spec)` compiles a generated spec and opens the standard MuJoCo passive
+  viewer.
+- `view_node_velocity_terminal(spec)` opens the MuJoCo viewer for a routed
+  continuous-tube model and reads node-level scalar velocity commands from the
+  terminal. Each node command is mapped through `NodeVelocityController` into
+  routed tendon actuator commands every simulation step.
+
+```python
+from mujoco_truss_gen import get_mujoco_spec, view_node_velocity_terminal
+
+spec = get_mujoco_spec("tetrahedron", realistic=False)
+view_node_velocity_terminal(spec, speed=0.01)
+```
+
+While the viewer is running, enter commands at the `node>` prompt:
+
+```text
+nodes                 # list node indices and names
+set node_2 0.01       # set a node command by name
+1 -0.005              # shorthand: set node index 1 to -0.005
+add node_2 0.002      # increment a node command
+show                  # print current node and tendon commands
+zero                  # reset all node commands to 0
+quit                  # close the control loop
+```
+
+Node command values are clipped to `[-speed, speed]`. Route endpoints are
+passive and remain zero. `view_node_velocity(spec)` is the Tk slider-panel
+variant, but it is not supported on macOS builds where Tk and `mjpython`
+conflict; use `view_node_velocity_terminal(spec)` for local testing there.
