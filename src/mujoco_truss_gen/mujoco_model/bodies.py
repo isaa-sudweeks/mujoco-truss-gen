@@ -107,7 +107,7 @@ def add_routed_node_body(
         mass=mass,
     )
     if connector_direction is not None:
-        node_geom.quat = _face_normal_quat(connector_direction)
+        node_geom.quat = _face_normal_quat(connector_direction, hinge_axis)
     disable_geom_contacts(node_geom)
 
     for suffix, axis in (
@@ -132,17 +132,113 @@ def add_routed_node_body(
     return node_body
 
 
-def _face_normal_quat(connector_direction: Vector) -> list[float]:
+def _face_normal_quat(
+    connector_direction: Vector,
+    up_axis: Vector = (0.0, 0.0, 1.0),
+) -> list[float]:
     direction = np.array(connector_direction, dtype=float)
-    planar_direction = direction[:2]
-    norm = float(np.linalg.norm(planar_direction))
-    if norm < 1e-10:
+    x_axis = _unit_vector(direction)
+    if x_axis is None:
         return [1.0, 0.0, 0.0, 0.0]
 
-    x_axis = planar_direction / norm
-    angle = float(np.arctan2(x_axis[1], x_axis[0]))
-    half_angle = 0.5 * angle
-    return [float(np.cos(half_angle)), 0.0, 0.0, float(np.sin(half_angle))]
+    z_axis = np.array(up_axis, dtype=float)
+    z_axis = z_axis - x_axis * float(np.dot(z_axis, x_axis))
+    z_axis = _unit_vector(z_axis)
+    if z_axis is None:
+        z_axis = _orthogonal_unit_vector(x_axis)
+
+    y_axis = _unit_vector(np.cross(z_axis, x_axis))
+    if y_axis is None:
+        return [1.0, 0.0, 0.0, 0.0]
+    z_axis = np.cross(x_axis, y_axis)
+    rotation_matrix = np.column_stack((x_axis, y_axis, z_axis))
+    return _matrix_to_quat(rotation_matrix)
+
+
+def _unit_vector(vector: np.ndarray) -> np.ndarray | None:
+    norm = float(np.linalg.norm(vector))
+    if norm < 1e-10:
+        return None
+    return vector / norm
+
+
+def _orthogonal_unit_vector(axis: np.ndarray) -> np.ndarray:
+    candidate = np.array([1.0, 0.0, 0.0])
+    if abs(float(np.dot(axis, candidate))) > 0.9:
+        candidate = np.array([0.0, 1.0, 0.0])
+    orthogonal = candidate - axis * float(np.dot(candidate, axis))
+    unit = _unit_vector(orthogonal)
+    if unit is None:
+        return np.array([0.0, 0.0, 1.0])
+    return unit
+
+
+def _matrix_to_quat(rotation_matrix: np.ndarray) -> list[float]:
+    trace = float(np.trace(rotation_matrix))
+    if trace > 0.0:
+        s = 2.0 * np.sqrt(trace + 1.0)
+        quat = np.array(
+            [
+                0.25 * s,
+                (rotation_matrix[2, 1] - rotation_matrix[1, 2]) / s,
+                (rotation_matrix[0, 2] - rotation_matrix[2, 0]) / s,
+                (rotation_matrix[1, 0] - rotation_matrix[0, 1]) / s,
+            ]
+        )
+    else:
+        diagonal_index = int(np.argmax(np.diag(rotation_matrix)))
+        if diagonal_index == 0:
+            s = 2.0 * np.sqrt(
+                1.0
+                + rotation_matrix[0, 0]
+                - rotation_matrix[1, 1]
+                - rotation_matrix[2, 2]
+            )
+            quat = np.array(
+                [
+                    (rotation_matrix[2, 1] - rotation_matrix[1, 2]) / s,
+                    0.25 * s,
+                    (rotation_matrix[0, 1] + rotation_matrix[1, 0]) / s,
+                    (rotation_matrix[0, 2] + rotation_matrix[2, 0]) / s,
+                ]
+            )
+        elif diagonal_index == 1:
+            s = 2.0 * np.sqrt(
+                1.0
+                + rotation_matrix[1, 1]
+                - rotation_matrix[0, 0]
+                - rotation_matrix[2, 2]
+            )
+            quat = np.array(
+                [
+                    (rotation_matrix[0, 2] - rotation_matrix[2, 0]) / s,
+                    (rotation_matrix[0, 1] + rotation_matrix[1, 0]) / s,
+                    0.25 * s,
+                    (rotation_matrix[1, 2] + rotation_matrix[2, 1]) / s,
+                ]
+            )
+        else:
+            s = 2.0 * np.sqrt(
+                1.0
+                + rotation_matrix[2, 2]
+                - rotation_matrix[0, 0]
+                - rotation_matrix[1, 1]
+            )
+            quat = np.array(
+                [
+                    (rotation_matrix[1, 0] - rotation_matrix[0, 1]) / s,
+                    (rotation_matrix[0, 2] + rotation_matrix[2, 0]) / s,
+                    (rotation_matrix[1, 2] + rotation_matrix[2, 1]) / s,
+                    0.25 * s,
+                ]
+            )
+
+    unit_quat = _unit_vector(quat)
+    if unit_quat is None:
+        return [1.0, 0.0, 0.0, 0.0]
+    if unit_quat[0] < 0.0:
+        unit_quat = -unit_quat
+    return unit_quat.tolist()
 
 
 def add_free_node_body(

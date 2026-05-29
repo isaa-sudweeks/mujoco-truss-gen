@@ -743,6 +743,41 @@ def test_realistic_routed_shape_clones_nodes_and_adds_bisector_controller() -> N
             assert edge_length == pytest.approx(1.0, abs=0.05)
 
 
+def test_realistic_routed_node_boxes_face_connector_rods() -> None:
+    root = ET.fromstring(get_mujoco_spec("tetrahedron", realistic=True).to_xml())
+    routed_nodes = [
+        body
+        for body in root.findall("./worldbody/body")
+        if body.get("name", "").startswith("node_")
+        and body.find(f"./body[@name='rod_{body.get('name')}']") is not None
+    ]
+    assert routed_nodes
+
+    for node_body in routed_nodes:
+        node_name = node_body.get("name")
+        assert node_name is not None
+
+        hinge_joint = node_body.find(f"./joint[@name='{node_name}_z_hinge']")
+        assert hinge_joint is not None
+
+        rod_body = node_body.find(f"./body[@name='rod_{node_name}']")
+        assert rod_body is not None
+        assert rod_body.find("./joint") is None
+
+        box_geom = node_body.find("./geom[@type='box']")
+        assert box_geom is not None
+        face_normal = _quat_rotate_x(_xml_vector(box_geom.get("quat", "1 0 0 0")))
+
+        tip_site = rod_body.find(f"./site[@name='tip_site_{node_name}']")
+        assert tip_site is not None
+        connector_direction = _unit(_xml_vector(tip_site.get("pos", "")))
+
+        assert float(np.dot(face_normal, connector_direction)) == pytest.approx(
+            1.0,
+            abs=1e-5,
+        )
+
+
 def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
     node_dict, shape_dict = get_preset_definition("tetrahedron")
     spec = get_mujoco_spec(node_dict, shape_dict, realistic=True)
