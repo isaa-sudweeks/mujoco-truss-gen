@@ -88,6 +88,50 @@ def add_planar_node_body(
     return node_body
 
 
+def add_routed_node_body(
+    spec: mujoco.MjSpec,
+    node_name: str,
+    position: Vector,
+    hinge_axis: Vector,
+    connector_direction: Vector | None = None,
+    mass: float = NODE_MASS,
+    box_size: list[float] | tuple[float, float, float] = BOX_SIZE,
+) -> Any:
+    node_body = spec.worldbody.add_body(name=node_name, pos=position)
+    node_body.add_site(name=node_name)
+    node_geom = node_body.add_geom(
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        size=box_size,
+        rgba=NODE_RGBA,
+        material=NODE_MATERIAL,
+        mass=mass,
+    )
+    if connector_direction is not None:
+        node_geom.quat = _face_normal_quat(connector_direction)
+    disable_geom_contacts(node_geom)
+
+    for suffix, axis in (
+        ("x", [1.0, 0.0, 0.0]),
+        ("y", [0.0, 1.0, 0.0]),
+        ("z", [0.0, 0.0, 1.0]),
+    ):
+        node_body.add_joint(
+            type=mujoco.mjtJoint.mjJNT_SLIDE,
+            name=f"{node_name}_{suffix}",
+            pos=[0.0, 0.0, 0.0],
+            axis=axis,
+        )
+
+    node_body.add_joint(
+        type=mujoco.mjtJoint.mjJNT_HINGE,
+        name=f"{node_name}_z_hinge",
+        axis=hinge_axis,
+        pos=[0.0, 0.0, 0.0],
+    )
+
+    return node_body
+
+
 def _face_normal_quat(connector_direction: Vector) -> list[float]:
     direction = np.array(connector_direction, dtype=float)
     planar_direction = direction[:2]
@@ -219,6 +263,54 @@ def connect_node_to_ball(
     ball_position = np.array(ball.pos, dtype=float)
     node_position = np.array(node_dict[instance_name], dtype=float)
     rod_vector = np.dot(rotation_matrix.T, ball_position - node_position)
+
+    rod = node_body.add_body(name=f"rod_{instance_name}", pos=[0.0, 0.0, 0.0])
+    rod.add_site(name=f"tip_site_{instance_name}", pos=rod_vector.tolist())
+    rod_geom = rod.add_geom(
+        type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+        fromto=[0.0, 0.0, 0.0, *rod_vector.tolist()],
+        size=[params.rod_radius],
+        rgba=ROD_RGBA,
+        material=ROD_MATERIAL,
+        mass=params.rod_mass,
+    )
+    disable_geom_contacts(rod_geom)
+
+    actuator = spec.add_actuator(
+        name=angle_bisector_actuator_name(instance_name),
+        trntype=mujoco.mjtTrn.mjTRN_JOINT,
+        target=f"{instance_name}_z_hinge",
+        ctrllimited=True,
+        ctrlrange=params.hinge_ctrl_range,
+        forcelimited=True,
+        forcerange=params.hinge_force_range,
+    )
+    actuator.set_to_position(kp=params.hinge_position_kp)
+
+    constraint = spec.add_equality(
+        name=f"connect_{instance_name}",
+        type=mujoco.mjtEq.mjEQ_CONNECT,
+        objtype=mujoco.mjtObj.mjOBJ_SITE,
+    )
+    constraint.name1 = f"tip_site_{instance_name}"
+    constraint.name2 = f"ball_site_{original_name}"
+    constraint.solref = params.connect_constraint_solref
+    constraint.solimp = params.connect_constraint_solimp
+
+
+def connect_routed_node_to_ball(
+    spec: mujoco.MjSpec,
+    node_body: Any,
+    instance_name: str,
+    ball: Any,
+    original_name: str,
+    node_dict: NodeDict,
+    physical_params: TrussPhysicalParameters | None = None,
+) -> None:
+    params = physical_params or TrussPhysicalParameters()
+    ball_position = np.array(ball.pos, dtype=float)
+    node_position = np.array(node_dict[instance_name], dtype=float)
+    rod_vector = ball_position - node_position
 
     rod = node_body.add_body(name=f"rod_{instance_name}", pos=[0.0, 0.0, 0.0])
     rod.add_site(name=f"tip_site_{instance_name}", pos=rod_vector.tolist())

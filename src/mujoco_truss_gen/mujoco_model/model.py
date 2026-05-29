@@ -180,9 +180,9 @@ class MujocoModel:
     def set_wcrm(self, wcrm: bool) -> None:
         self.wcrm = wcrm
 
-    def _uses_realistic_triangle_bodies(self) -> bool:
+    def _uses_realistic_connector_balls(self) -> bool:
         return any(
-            self.model.body(body_id).name.startswith("tri_")
+            self.model.body(body_id).name.startswith("connector_ball_")
             for body_id in range(self.model.nbody)
         )
 
@@ -314,7 +314,7 @@ class MujocoModel:
         )
 
     def _logical_node_name(self, node_name: str) -> str:
-        return node_name.split("_tri_", 1)[0]
+        return node_name.split("_tri_", 1)[0].split("_route_", 1)[0]
 
     def _logical_rigidity_graph(
         self,
@@ -357,7 +357,7 @@ class MujocoModel:
         return node_names, node_positions, edges, (0, 1, 2)
 
     def _rigidity_matrix_data(self) -> tuple[np.ndarray, int]:
-        if self._uses_realistic_triangle_bodies():
+        if self._uses_realistic_connector_balls():
             node_names, node_positions, structural_edges, axis_indices = (
                 self._logical_rigidity_graph()
             )

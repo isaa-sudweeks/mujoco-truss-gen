@@ -67,6 +67,8 @@ def test_builtin_presets_compile() -> None:
     for preset_name in ("octahedron", "icosahedron", "solar_array"):
         get_mujoco_spec(preset_name, realistic=True).compile()
 
+    get_mujoco_spec("tetrahedron", realistic=True).compile()
+
 
 def test_builtin_preset_definitions_support_unit_scale() -> None:
     unscaled_nodes, unscaled_structure = get_preset_definition("octahedron")
@@ -693,6 +695,83 @@ def test_routed_shape_spec_compiles_and_runs() -> None:
         env.close()
 
 
+def test_realistic_routed_shape_clones_nodes_and_adds_bisector_controller() -> None:
+    node_dict, shape_dict = get_preset_definition("tetrahedron")
+    spec = get_mujoco_spec(node_dict, shape_dict, realistic=True)
+    root = ET.fromstring(spec.to_xml())
+
+    route_sites = {
+        spatial.get("name"): [site.get("site") for site in spatial.findall("site")]
+        for spatial in root.findall("./tendon/spatial")
+        if spatial.get("name", "").startswith("route_")
+    }
+    assert route_sites == {
+        "route_path_1": ["node_1", "node_2", "node_4", "node_3"],
+        "route_path_2": [
+            "node_2_route_path_2_0",
+            "node_3_route_path_2_1",
+            "node_1_route_path_2_2",
+            "node_4_route_path_2_3",
+        ],
+    }
+    assert {
+        body.get("name")
+        for body in root.findall("./worldbody/body")
+        if body.get("name", "").startswith("connector_ball_")
+    } == {
+        "connector_ball_node_1",
+        "connector_ball_node_2",
+        "connector_ball_node_3",
+        "connector_ball_node_4",
+    }
+
+    model = MujocoModel(spec)
+    controller = model.angle_bisector_controller
+    assert controller.enabled
+    assert {target.node_name for target in controller.targets} == {
+        "node_2",
+        "node_4",
+        "node_3_route_path_2_1",
+        "node_1_route_path_2_2",
+    }
+    assert len(model.external_actuator_names) == 6
+    assert all(
+        not name.startswith("bisector_act_") for name in model.external_actuator_names
+    )
+    for tendon_name, edge_length in model.get_edge_length_dict().items():
+        if tendon_name.startswith("tendon_"):
+            assert edge_length == pytest.approx(1.0, abs=0.05)
+
+
+def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
+    node_dict, shape_dict = get_preset_definition("tetrahedron")
+    spec = get_mujoco_spec(node_dict, shape_dict, realistic=True)
+    model = MujocoModel(spec)
+    model.apply_angle_bisector_control()
+    mujoco.mj_forward(model.model, model.data)
+
+    for target in model.angle_bisector_controller.targets:
+        node_pos = model.data.site_xpos[target.node_site_id]
+        neighbor_a = model.data.site_xpos[target.neighbor_site_ids[0]]
+        neighbor_b = model.data.site_xpos[target.neighbor_site_ids[1]]
+        bisector = _unit(_unit(neighbor_a - node_pos) + _unit(neighbor_b - node_pos))
+        planar_bisector = bisector - target.hinge_axis * float(np.dot(bisector, target.hinge_axis))
+        planar_bisector = _unit(planar_bisector)
+
+        tip_site_id = mujoco.mj_name2id(
+            model.model,
+            mujoco.mjtObj.mjOBJ_SITE,
+            f"tip_site_{target.node_name}",
+        )
+        rod_direction = _unit(model.data.site_xpos[tip_site_id] - node_pos)
+
+        assert float(np.dot(rod_direction, planar_bisector)) == pytest.approx(
+            -1.0,
+            abs=1e-4,
+        )
+        assert abs(float(np.dot(rod_direction, target.hinge_axis))) < 1e-6
+
+
 def test_node_velocity_controller_maps_node_commands_to_edge_commands() -> None:
     node_dict = {
         "node_1": [0.0, 0.0, 0.2],
@@ -964,6 +1043,11 @@ def test_routed_shape_generation_does_not_mutate_custom_dictionaries() -> None:
     original_shapes = deepcopy(shape_dict)
 
     get_mujoco_spec(node_dict, shape_dict, realistic=False).compile()
+
+    assert node_dict == original_nodes
+    assert shape_dict == original_shapes
+
+    get_mujoco_spec(node_dict, shape_dict, realistic=True).compile()
 
     assert node_dict == original_nodes
     assert shape_dict == original_shapes

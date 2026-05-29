@@ -21,6 +21,7 @@ class AngleBisectorTarget:
     node_site_id: int
     neighbor_site_ids: tuple[int, int]
     initial_rod_vector: np.ndarray
+    hinge_axis: np.ndarray
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +59,11 @@ class AngleBisectorController:
 
             parent_xmat = data.xmat[target.parent_body_id].reshape(3, 3)
             bisector_parent = parent_xmat.T @ bisector_world
-            angle = _signed_planar_angle(target.initial_rod_vector, -bisector_parent)
+            angle = _signed_angle_about_axis(
+                target.initial_rod_vector,
+                -bisector_parent,
+                target.hinge_axis,
+            )
             if angle is None:
                 continue
 
@@ -109,6 +114,7 @@ class AngleBisectorController:
 
                 node_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, node_name)
                 node_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, node_name)
+                hinge_axis = _hinge_axis(node_body, node_name)
                 neighbor_names = tuple(name for name in node_names if name != node_name)
                 neighbor_site_ids = tuple(
                     mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
@@ -132,8 +138,56 @@ class AngleBisectorController:
                         node_site_id=node_site_id,
                         neighbor_site_ids=(neighbor_site_ids[0], neighbor_site_ids[1]),
                         initial_rod_vector=initial_rod_vector,
+                        hinge_axis=hinge_axis,
                     )
                 )
+
+        route_neighbors = _route_neighbors_from_xml(root)
+        for node_name, neighbor_names in route_neighbors.items():
+            if len(neighbor_names) != 2:
+                continue
+
+            node_body = worldbody.find(f"./body[@name='{node_name}']")
+            if node_body is None:
+                continue
+
+            initial_rod_vector = _rod_vector(node_body, node_name)
+            if initial_rod_vector is None:
+                continue
+
+            actuator_id = mujoco.mj_name2id(
+                model,
+                mujoco.mjtObj.mjOBJ_ACTUATOR,
+                angle_bisector_actuator_name(node_name),
+            )
+            node_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, node_name)
+            node_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, node_name)
+            neighbor_site_ids = tuple(
+                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
+                for name in neighbor_names
+            )
+            if (
+                actuator_id < 0
+                or node_body_id < 0
+                or node_site_id < 0
+                or any(site_id < 0 for site_id in neighbor_site_ids)
+            ):
+                continue
+
+            parent_body_id = int(model.body_parentid[node_body_id])
+            targets.append(
+                AngleBisectorTarget(
+                    node_name=node_name,
+                    neighbor_names=(neighbor_names[0], neighbor_names[1]),
+                    actuator_id=actuator_id,
+                    node_body_id=node_body_id,
+                    parent_body_id=parent_body_id,
+                    node_site_id=node_site_id,
+                    neighbor_site_ids=(neighbor_site_ids[0], neighbor_site_ids[1]),
+                    initial_rod_vector=initial_rod_vector,
+                    hinge_axis=_hinge_axis(node_body, node_name),
+                )
+            )
 
         return targets
 
@@ -376,6 +430,50 @@ def _rod_vector(node_body: ET.Element, node_name: str) -> np.ndarray | None:
     return vector
 
 
+def _hinge_axis(node_body: ET.Element, node_name: str) -> np.ndarray:
+    joint = node_body.find(f"./joint[@name='{node_name}_z_hinge']")
+    if joint is None:
+        return np.array([0.0, 0.0, 1.0])
+
+    axis = np.fromstring(joint.get("axis", "0 0 1"), sep=" ", dtype=float)
+    if axis.size != 3:
+        return np.array([0.0, 0.0, 1.0])
+
+    unit = _unit_vector(axis)
+    if unit is None:
+        return np.array([0.0, 0.0, 1.0])
+    return unit
+
+
+def _route_neighbors_from_xml(root: ET.Element) -> dict[str, tuple[str, ...]]:
+    tendon_root = root.find("tendon")
+    if tendon_root is None:
+        return {}
+
+    neighbors: dict[str, list[str]] = {}
+    for spatial in tendon_root.findall("spatial"):
+        if not spatial.get("name", "").startswith("route_"):
+            continue
+        route = [
+            site_ref.get("site")
+            for site_ref in spatial.findall("site")
+            if site_ref.get("site")
+        ]
+        for index, node_name in enumerate(route):
+            adjacent = []
+            if index > 0:
+                adjacent.append(route[index - 1])
+            if index < len(route) - 1:
+                adjacent.append(route[index + 1])
+            if len(adjacent) == 2:
+                neighbors.setdefault(node_name, [])
+                for neighbor_name in adjacent:
+                    if neighbor_name not in neighbors[node_name]:
+                        neighbors[node_name].append(neighbor_name)
+
+    return {node_name: tuple(node_neighbors) for node_name, node_neighbors in neighbors.items()}
+
+
 def _unit_vector(vector: np.ndarray) -> np.ndarray | None:
     norm = float(np.linalg.norm(vector))
     if norm < 1e-10:
@@ -383,16 +481,23 @@ def _unit_vector(vector: np.ndarray) -> np.ndarray | None:
     return vector / norm
 
 
-def _signed_planar_angle(from_vector: np.ndarray, to_vector: np.ndarray) -> float | None:
-    from_xy = from_vector[:2]
-    to_xy = to_vector[:2]
-    from_norm = float(np.linalg.norm(from_xy))
-    to_norm = float(np.linalg.norm(to_xy))
-    if from_norm < 1e-10 or to_norm < 1e-10:
+def _signed_angle_about_axis(
+    from_vector: np.ndarray,
+    to_vector: np.ndarray,
+    axis: np.ndarray,
+) -> float | None:
+    axis_unit = _unit_vector(axis)
+    if axis_unit is None:
         return None
 
-    from_xy = from_xy / from_norm
-    to_xy = to_xy / to_norm
-    cross_z = from_xy[0] * to_xy[1] - from_xy[1] * to_xy[0]
-    dot = float(np.clip(np.dot(from_xy, to_xy), -1.0, 1.0))
-    return math.atan2(cross_z, dot)
+    from_projected = from_vector - axis_unit * float(np.dot(from_vector, axis_unit))
+    to_projected = to_vector - axis_unit * float(np.dot(to_vector, axis_unit))
+    from_unit = _unit_vector(from_projected)
+    to_unit = _unit_vector(to_projected)
+    if from_unit is None or to_unit is None:
+        return None
+
+    cross = np.cross(from_unit, to_unit)
+    signed_cross = float(np.dot(axis_unit, cross))
+    dot = float(np.clip(np.dot(from_unit, to_unit), -1.0, 1.0))
+    return math.atan2(signed_cross, dot)
