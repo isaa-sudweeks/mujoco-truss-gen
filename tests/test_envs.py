@@ -28,6 +28,7 @@ from mujoco_truss_gen import (
 )
 from mujoco_truss_gen.mujoco_model.constants import (
     ACTIVE_NODE_MASS,
+    EDGE_TENDON_WIDTH,
     NODE_RADIUS,
     PASSIVE_NODE_MASS,
 )
@@ -743,8 +744,14 @@ def test_realistic_routed_shape_clones_nodes_and_adds_bisector_controller() -> N
             assert edge_length == pytest.approx(1.0, abs=0.05)
 
 
-def test_realistic_routed_node_boxes_face_connector_rods() -> None:
+def test_realistic_routed_passive_cylinders_face_connector_rods() -> None:
     root = ET.fromstring(get_mujoco_spec("tetrahedron", realistic=True).to_xml())
+    passive_nodes = set()
+    for spatial in root.findall("./tendon/spatial"):
+        if not spatial.get("name", "").startswith("route_"):
+            continue
+        sites = spatial.findall("site")
+        passive_nodes.update((sites[0].get("site"), sites[-1].get("site")))
     routed_nodes = [
         body
         for body in root.findall("./worldbody/body")
@@ -764,9 +771,16 @@ def test_realistic_routed_node_boxes_face_connector_rods() -> None:
         assert rod_body is not None
         assert rod_body.find("./joint") is None
 
-        box_geom = node_body.find("./geom[@type='box']")
-        assert box_geom is not None
-        face_normal = _quat_rotate_x(_xml_vector(box_geom.get("quat", "1 0 0 0")))
+        node_geom = node_body.find("./geom")
+        assert node_geom is not None
+        if node_name in passive_nodes:
+            assert node_geom.get("type") == "cylinder"
+            size = _xml_vector(node_geom.get("size", ""))
+            assert float(size[0]) == pytest.approx(EDGE_TENDON_WIDTH)
+            face_normal = _quat_rotate_z(_xml_vector(node_geom.get("quat", "1 0 0 0")))
+        else:
+            assert node_geom.get("type") == "box"
+            face_normal = _quat_rotate_x(_xml_vector(node_geom.get("quat", "1 0 0 0")))
 
         tip_site = rod_body.find(f"./site[@name='tip_site_{node_name}']")
         assert tip_site is not None
@@ -1121,5 +1135,16 @@ def _quat_rotate_x(quat: np.ndarray) -> np.ndarray:
             1.0 - 2.0 * (y * y + z * z),
             2.0 * (x * y + z * w),
             2.0 * (x * z - y * w),
+        ]
+    )
+
+
+def _quat_rotate_z(quat: np.ndarray) -> np.ndarray:
+    w, x, y, z = quat
+    return np.array(
+        [
+            2.0 * (x * z + y * w),
+            2.0 * (y * z - x * w),
+            1.0 - 2.0 * (x * x + y * y),
         ]
     )

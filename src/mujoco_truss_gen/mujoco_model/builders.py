@@ -385,6 +385,7 @@ def build_realistic_shapes(
         scale,
         physical_params=params,
     )
+    passive_nodes = _routed_passive_nodes(shape_dict)
 
     for instance_name, position in node_dict.items():
         original_name = find_original_node(node_instances, instance_name)
@@ -395,6 +396,7 @@ def build_realistic_shapes(
                 - np.array(position, dtype=float)
             )
 
+        is_passive = instance_name in passive_nodes
         node_body = add_routed_node_body(
             spec,
             node_name=instance_name,
@@ -403,8 +405,10 @@ def build_realistic_shapes(
             connector_direction=connector_direction.tolist()
             if connector_direction is not None
             else None,
-            mass=params.active_node_mass,
+            mass=params.passive_node_mass if is_passive else params.active_node_mass,
             box_size=params.box_size,
+            passive=is_passive,
+            edge_tendon_width=params.edge_tendon_width,
         )
 
         if not original_name or original_name not in connector_balls:
@@ -447,6 +451,14 @@ def build_realistic_shapes(
             actuated_tendons.add(tendon_name)
 
         add_route_tendon(spec, shape_name, route, physical_params=params)
+
+
+def _routed_passive_nodes(shape_dict: ShapeDict) -> set[str]:
+    passive_nodes = set()
+    for shape in shape_dict.values():
+        route = shape["route"]
+        passive_nodes.update((route[0], route[-1]))
+    return passive_nodes
 
 
 def build_triangle(

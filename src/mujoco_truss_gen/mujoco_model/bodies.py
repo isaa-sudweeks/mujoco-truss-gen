@@ -96,18 +96,30 @@ def add_routed_node_body(
     connector_direction: Vector | None = None,
     mass: float = NODE_MASS,
     box_size: list[float] | tuple[float, float, float] = BOX_SIZE,
+    passive: bool = False,
+    edge_tendon_width: float | None = None,
 ) -> Any:
     node_body = spec.worldbody.add_body(name=node_name, pos=position)
     node_body.add_site(name=node_name)
-    node_geom = node_body.add_geom(
-        type=mujoco.mjtGeom.mjGEOM_BOX,
-        size=box_size,
-        rgba=NODE_RGBA,
-        material=NODE_MATERIAL,
-        mass=mass,
-    )
-    if connector_direction is not None:
-        node_geom.quat = _face_normal_quat(connector_direction, hinge_axis)
+    if passive:
+        node_geom = _add_passive_cylinder_geom(
+            node_body,
+            mass=mass,
+            connector_direction=connector_direction,
+            up_axis=hinge_axis,
+            box_size=box_size,
+            edge_tendon_width=edge_tendon_width,
+        )
+    else:
+        node_geom = node_body.add_geom(
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=box_size,
+            rgba=NODE_RGBA,
+            material=NODE_MATERIAL,
+            mass=mass,
+        )
+        if connector_direction is not None:
+            node_geom.quat = _face_normal_quat(connector_direction, hinge_axis)
     disable_geom_contacts(node_geom)
 
     for suffix, axis in (
@@ -130,6 +142,52 @@ def add_routed_node_body(
     )
 
     return node_body
+
+
+def _add_passive_cylinder_geom(
+    node_body: Any,
+    *,
+    mass: float,
+    connector_direction: Vector | None,
+    up_axis: Vector,
+    box_size: list[float] | tuple[float, float, float],
+    edge_tendon_width: float | None,
+) -> Any:
+    radius = edge_tendon_width if edge_tendon_width is not None else BOX_SIZE[0]
+    half_length = float(box_size[0])
+    node_geom = node_body.add_geom(
+        type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+        size=[radius, half_length],
+        rgba=NODE_RGBA,
+        material=NODE_MATERIAL,
+        mass=mass,
+    )
+    if connector_direction is not None:
+        node_geom.quat = _flat_face_normal_quat(connector_direction, up_axis)
+    return node_geom
+
+
+def _flat_face_normal_quat(
+    connector_direction: Vector,
+    up_axis: Vector = (0.0, 0.0, 1.0),
+) -> list[float]:
+    direction = np.array(connector_direction, dtype=float)
+    z_axis = _unit_vector(direction)
+    if z_axis is None:
+        return [1.0, 0.0, 0.0, 0.0]
+
+    x_axis = np.array(up_axis, dtype=float)
+    x_axis = x_axis - z_axis * float(np.dot(x_axis, z_axis))
+    x_axis = _unit_vector(x_axis)
+    if x_axis is None:
+        x_axis = _orthogonal_unit_vector(z_axis)
+
+    y_axis = _unit_vector(np.cross(z_axis, x_axis))
+    if y_axis is None:
+        return [1.0, 0.0, 0.0, 0.0]
+    x_axis = np.cross(y_axis, z_axis)
+    rotation_matrix = np.column_stack((x_axis, y_axis, z_axis))
+    return _matrix_to_quat(rotation_matrix)
 
 
 def _face_normal_quat(
