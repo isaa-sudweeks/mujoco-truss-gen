@@ -14,12 +14,12 @@ ANGLE_BISECTOR_ACTUATOR_PREFIX = "bisector_act_"
 @dataclass(frozen=True, slots=True)
 class AngleBisectorTarget:
     node_name: str
-    neighbor_names: tuple[str, str]
+    neighbor_names: tuple[str, ...]
     actuator_id: int
     node_body_id: int
     parent_body_id: int
     node_site_id: int
-    neighbor_site_ids: tuple[int, int]
+    neighbor_site_ids: tuple[int, ...]
     initial_rod_vector: np.ndarray
     hinge_axis: np.ndarray
 
@@ -45,23 +45,30 @@ class AngleBisectorController:
     def update(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         for target in self.targets:
             node_pos = data.site_xpos[target.node_site_id]
-            neighbor_a = data.site_xpos[target.neighbor_site_ids[0]]
-            neighbor_b = data.site_xpos[target.neighbor_site_ids[1]]
+            neighbor_positions = [
+                data.site_xpos[site_id] for site_id in target.neighbor_site_ids
+            ]
 
-            dir_a = _unit_vector(neighbor_a - node_pos)
-            dir_b = _unit_vector(neighbor_b - node_pos)
-            if dir_a is None or dir_b is None:
-                continue
+            if len(neighbor_positions) == 1:
+                target_world = _unit_vector(node_pos - neighbor_positions[0])
+                if target_world is None:
+                    continue
+            else:
+                dir_a = _unit_vector(neighbor_positions[0] - node_pos)
+                dir_b = _unit_vector(neighbor_positions[1] - node_pos)
+                if dir_a is None or dir_b is None:
+                    continue
 
-            bisector_world = _unit_vector(dir_a + dir_b)
-            if bisector_world is None:
-                continue
+                bisector_world = _unit_vector(dir_a + dir_b)
+                if bisector_world is None:
+                    continue
+                target_world = -bisector_world
 
             parent_xmat = data.xmat[target.parent_body_id].reshape(3, 3)
-            bisector_parent = parent_xmat.T @ bisector_world
+            target_parent = parent_xmat.T @ target_world
             angle = _signed_angle_about_axis(
                 target.initial_rod_vector,
-                -bisector_parent,
+                target_parent,
                 target.hinge_axis,
             )
             if angle is None:
@@ -142,9 +149,9 @@ class AngleBisectorController:
                     )
                 )
 
-        route_neighbors = _route_neighbors_from_xml(root)
+        route_neighbors = _route_target_neighbors_from_xml(root)
         for node_name, neighbor_names in route_neighbors.items():
-            if len(neighbor_names) != 2:
+            if len(neighbor_names) not in {1, 2}:
                 continue
 
             node_body = worldbody.find(f"./body[@name='{node_name}']")
@@ -178,12 +185,12 @@ class AngleBisectorController:
             targets.append(
                 AngleBisectorTarget(
                     node_name=node_name,
-                    neighbor_names=(neighbor_names[0], neighbor_names[1]),
+                    neighbor_names=neighbor_names,
                     actuator_id=actuator_id,
                     node_body_id=node_body_id,
                     parent_body_id=parent_body_id,
                     node_site_id=node_site_id,
-                    neighbor_site_ids=(neighbor_site_ids[0], neighbor_site_ids[1]),
+                    neighbor_site_ids=neighbor_site_ids,
                     initial_rod_vector=initial_rod_vector,
                     hinge_axis=_hinge_axis(node_body, node_name),
                 )
@@ -445,7 +452,7 @@ def _hinge_axis(node_body: ET.Element, node_name: str) -> np.ndarray:
     return unit
 
 
-def _route_neighbors_from_xml(root: ET.Element) -> dict[str, tuple[str, ...]]:
+def _route_target_neighbors_from_xml(root: ET.Element) -> dict[str, tuple[str, ...]]:
     tendon_root = root.find("tendon")
     if tendon_root is None:
         return {}
@@ -465,11 +472,12 @@ def _route_neighbors_from_xml(root: ET.Element) -> dict[str, tuple[str, ...]]:
                 adjacent.append(route[index - 1])
             if index < len(route) - 1:
                 adjacent.append(route[index + 1])
-            if len(adjacent) == 2:
-                neighbors.setdefault(node_name, [])
-                for neighbor_name in adjacent:
-                    if neighbor_name not in neighbors[node_name]:
-                        neighbors[node_name].append(neighbor_name)
+            if not adjacent:
+                continue
+            neighbors.setdefault(node_name, [])
+            for neighbor_name in adjacent:
+                if neighbor_name not in neighbors[node_name]:
+                    neighbors[node_name].append(neighbor_name)
 
     return {node_name: tuple(node_neighbors) for node_name, node_neighbors in neighbors.items()}
 

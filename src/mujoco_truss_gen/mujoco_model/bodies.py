@@ -43,6 +43,7 @@ def add_planar_node_body(
     connector_direction: Vector | None = None,
     mass: float = NODE_MASS,
     box_size: list[float] | tuple[float, float, float] = BOX_SIZE,
+    hinge_damping: float = 0.0,
 ) -> Any:
     node_body = parent_body.add_body(name=node_name, pos=local_position)
     node_body.add_site(name=node_name)
@@ -83,6 +84,7 @@ def add_planar_node_body(
         name=f"{node_name}_z_hinge",
         axis=[0.0, 0.0, 1.0],
         pos=[0.0, 0.0, 0.0],
+        damping=hinge_damping,
     )
 
     return node_body
@@ -98,6 +100,7 @@ def add_routed_node_body(
     box_size: list[float] | tuple[float, float, float] = BOX_SIZE,
     passive: bool = False,
     edge_tendon_width: float | None = None,
+    hinge_damping: float = 0.0,
 ) -> Any:
     node_body = spec.worldbody.add_body(name=node_name, pos=position)
     node_body.add_site(name=node_name)
@@ -139,6 +142,7 @@ def add_routed_node_body(
         name=f"{node_name}_z_hinge",
         axis=hinge_axis,
         pos=[0.0, 0.0, 0.0],
+        damping=hinge_damping,
     )
 
     return node_body
@@ -558,6 +562,7 @@ def create_triangle_bodies(
                 connector_direction=connector_direction,
                 mass=_node_mass(instance_name, triangle_nodes, params),
                 box_size=params.box_size,
+                hinge_damping=params.hinge_damping,
             )
 
             if not original_name or original_name not in connector_balls:

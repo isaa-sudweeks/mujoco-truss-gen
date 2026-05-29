@@ -29,6 +29,7 @@ from mujoco_truss_gen import (
 from mujoco_truss_gen.mujoco_model.constants import (
     ACTIVE_NODE_MASS,
     EDGE_TENDON_WIDTH,
+    HINGE_DAMPING,
     NODE_RADIUS,
     PASSIVE_NODE_MASS,
 )
@@ -730,10 +731,14 @@ def test_realistic_routed_shape_clones_nodes_and_adds_bisector_controller() -> N
     controller = model.angle_bisector_controller
     assert controller.enabled
     assert {target.node_name for target in controller.targets} == {
+        "node_1",
         "node_2",
+        "node_3",
         "node_4",
+        "node_2_route_path_2_0",
         "node_3_route_path_2_1",
         "node_1_route_path_2_2",
+        "node_4_route_path_2_3",
     }
     assert len(model.external_actuator_names) == 6
     assert all(
@@ -766,6 +771,7 @@ def test_realistic_routed_passive_cylinders_face_connector_rods() -> None:
 
         hinge_joint = node_body.find(f"./joint[@name='{node_name}_z_hinge']")
         assert hinge_joint is not None
+        assert float(hinge_joint.get("damping", "nan")) == pytest.approx(HINGE_DAMPING)
 
         rod_body = node_body.find(f"./body[@name='rod_{node_name}']")
         assert rod_body is not None
@@ -801,11 +807,23 @@ def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
 
     for target in model.angle_bisector_controller.targets:
         node_pos = model.data.site_xpos[target.node_site_id]
-        neighbor_a = model.data.site_xpos[target.neighbor_site_ids[0]]
-        neighbor_b = model.data.site_xpos[target.neighbor_site_ids[1]]
-        bisector = _unit(_unit(neighbor_a - node_pos) + _unit(neighbor_b - node_pos))
-        planar_bisector = bisector - target.hinge_axis * float(np.dot(bisector, target.hinge_axis))
-        planar_bisector = _unit(planar_bisector)
+        neighbor_positions = [
+            model.data.site_xpos[site_id] for site_id in target.neighbor_site_ids
+        ]
+        if len(neighbor_positions) == 1:
+            target_direction = _unit(node_pos - neighbor_positions[0])
+            expected_dot = 1.0
+        else:
+            bisector = _unit(
+                _unit(neighbor_positions[0] - node_pos)
+                + _unit(neighbor_positions[1] - node_pos)
+            )
+            target_direction = bisector
+            expected_dot = -1.0
+        planar_target = target_direction - target.hinge_axis * float(
+            np.dot(target_direction, target.hinge_axis)
+        )
+        planar_target = _unit(planar_target)
 
         tip_site_id = mujoco.mj_name2id(
             model.model,
@@ -814,8 +832,8 @@ def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
         )
         rod_direction = _unit(model.data.site_xpos[tip_site_id] - node_pos)
 
-        assert float(np.dot(rod_direction, planar_bisector)) == pytest.approx(
-            -1.0,
+        assert float(np.dot(rod_direction, planar_target)) == pytest.approx(
+            expected_dot,
             abs=1e-4,
         )
         assert abs(float(np.dot(rod_direction, target.hinge_axis))) < 1e-6

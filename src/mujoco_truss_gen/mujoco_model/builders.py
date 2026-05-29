@@ -409,6 +409,7 @@ def build_realistic_shapes(
             box_size=params.box_size,
             passive=is_passive,
             edge_tendon_width=params.edge_tendon_width,
+            hinge_damping=params.hinge_damping,
         )
 
         if not original_name or original_name not in connector_balls:
