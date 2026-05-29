@@ -9,7 +9,7 @@ NODE_RADIUS = 0.1
 # Minimum allowed world-space node center height after geometry lifting.
 MIN_NODE_CENTER_Z = NODE_RADIUS + 0.05
 # Default node mass used when active/passive roles are not distinguished.
-NODE_MASS = 1.98
+NODE_MASS = 0.1
 # Mass for actuated route or triangle nodes.
 ACTIVE_NODE_MASS = NODE_MASS
 # Mass for passive route endpoints or triangle passive nodes.
@@ -27,7 +27,7 @@ TRIANGLE_BODY_MASS = 0.01
 # Gravity compensation applied to realistic triangle body shells.
 TRIANGLE_BODY_GRAVCOMP = 1.0
 # Proportional gain for hinge position actuators that orient connector rods.
-HINGE_POSITION_KP = 1000.0
+HINGE_POSITION_KP = 10.0
 # Passive damping on hinge joints that orient connector rods.
 HINGE_DAMPING = 1.0
 # Force limits for hinge position actuators.
