@@ -10,6 +10,7 @@ import pytest
 from mujoco_truss_gen import (
     PRESETS,
     AccelerometerConfig,
+    DomainRandomizationConfig,
     MujocoModel,
     MujocoNodeVelocityCommandEnv,
     MujocoRelativeObsEnv,
@@ -101,6 +102,63 @@ def test_scaled_abstract_preset_keeps_control_values_unscaled() -> None:
     assert actuator is not None
     np.testing.assert_allclose(_xml_vector(actuator.get("ctrlrange", "")), [-0.05, 0.05])
     np.testing.assert_allclose(_xml_vector(actuator.get("actrange", "")), [0.0, 3.0])
+
+
+def test_env_domain_randomization_model_factory_rebuilds_on_reset() -> None:
+    calls = []
+
+    def model_factory(rng: np.random.Generator):
+        calls.append(rng)
+        scale = 0.5 if len(calls) == 1 else 2.0
+        return get_mujoco_spec("octahedron", scale=scale, realistic=False)
+
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=False),
+            domain_randomization=DomainRandomizationConfig(model_factory=model_factory),
+        )
+    )
+    try:
+        env.reset(seed=1)
+        small_extent = env.mj_model.model.stat.extent
+
+        env.reset(seed=2)
+        large_extent = env.mj_model.model.stat.extent
+
+        assert len(calls) == 2
+        assert large_extent > small_extent
+    finally:
+        env.close()
+
+
+def test_env_runtime_domain_randomization_restores_nominals_between_resets() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=False),
+            domain_randomization=DomainRandomizationConfig(
+                body_mass_multiplier_range=(2.0, 2.0),
+                body_inertia_multiplier_range=(3.0, 3.0),
+                geom_friction_slide_range=(0.25, 0.25),
+                gravity_z_range=(-4.0, -4.0),
+            ),
+        )
+    )
+    try:
+        nominal_mass = env.mj_model.model.body_mass.copy()
+        nominal_inertia = env.mj_model.model.body_inertia.copy()
+
+        _, info = env.reset(seed=1)
+        np.testing.assert_allclose(env.mj_model.model.body_mass, nominal_mass * 2.0)
+        np.testing.assert_allclose(env.mj_model.model.body_inertia, nominal_inertia * 3.0)
+        np.testing.assert_allclose(env.mj_model.model.geom_friction[:, 0], 0.25)
+        assert env.mj_model.model.opt.gravity[2] == pytest.approx(-4.0)
+        assert info["domain_randomization"]["body_mass_multiplier"] == pytest.approx(2.0)
+
+        env.reset(seed=2)
+        np.testing.assert_allclose(env.mj_model.model.body_mass, nominal_mass * 2.0)
+        np.testing.assert_allclose(env.mj_model.model.body_inertia, nominal_inertia * 3.0)
+    finally:
+        env.close()
 
 
 def test_preset_scale_must_be_positive() -> None:

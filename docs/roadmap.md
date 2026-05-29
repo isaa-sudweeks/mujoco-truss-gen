@@ -35,6 +35,9 @@ the package is treated as stable research infrastructure.
 - Routed shape paths are currently practical only for short paths. Longer paths
   likely need a higher-level node-command abstraction that maps node commands to
   edge commands internally.
+- The routed-tube `realistic=True` generation path is not fully correct yet.
+  It should be treated as experimental until the routed connector/body geometry
+  is fixed.
 - The STL-to-MuJoCo path is experimental and can produce unstable generated
   models.
 

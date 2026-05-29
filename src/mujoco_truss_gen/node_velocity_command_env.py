@@ -22,6 +22,8 @@ class MujocoNodeVelocityCommandEnv(MujocoRelativeObsEnv):
         **config_overrides: Any,
     ):
         super().__init__(model_source, render_mode=render_mode, rank=rank, **config_overrides)
+
+    def _on_model_changed(self) -> None:
         self.node_velocity_controller = NodeVelocityController(
             self.mj_model.model,
             self.mj_model.xml,
@@ -34,6 +36,9 @@ class MujocoNodeVelocityCommandEnv(MujocoRelativeObsEnv):
                 "MujocoNodeVelocityCommandEnv requires a routed continuous-tube model "
                 "with route tendons and edge actuators."
             )
+        super()._on_model_changed()
+
+    def _define_action_space(self) -> None:
         self.action_space = spaces.Box(
             low=-self.config.speed,
             high=self.config.speed,

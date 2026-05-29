@@ -21,6 +21,8 @@ class MujocoVelocityCommandEnv(MujocoRelativeObsEnv):
         **config_overrides: Any,
     ):
         super().__init__(model_source, render_mode=render_mode, rank=rank, **config_overrides)
+
+    def _define_action_space(self) -> None:
         self.action_space = spaces.Box(
             low=-self.config.speed,
             high=self.config.speed,

@@ -29,7 +29,7 @@ Environment constructors accept any of these model sources:
 Shared configuration is provided by `TrussEnvConfig`:
 
 ```python
-from mujoco_truss_gen import TrussEnvConfig
+from mujoco_truss_gen import DomainRandomizationConfig, TrussEnvConfig
 
 config = TrussEnvConfig(
     model_source=spec,
@@ -46,8 +46,91 @@ config = TrussEnvConfig(
     control_noise_std=0.0,
     control_noise_relative=True,
     runtime_apply_control_noise=False,
+    domain_randomization=None,
 )
 ```
+
+## Domain Randomization
+
+Use `DomainRandomizationConfig` to sample a new domain on each environment
+reset. The sampled values remain fixed for that episode.
+
+Runtime randomization mutates fields on the compiled MuJoCo model and is the
+cheapest option:
+
+```python
+from mujoco_truss_gen import (
+    DomainRandomizationConfig,
+    MujocoTrussEnv,
+    TrussEnvConfig,
+    get_mujoco_spec,
+)
+
+spec = get_mujoco_spec("octahedron", realistic=False)
+env = MujocoTrussEnv(
+    TrussEnvConfig(
+        spec,
+        domain_randomization=DomainRandomizationConfig(
+            body_mass_multiplier_range=(0.8, 1.2),
+            body_inertia_multiplier_range=(0.8, 1.2),
+            dof_damping_multiplier_range=(0.7, 1.3),
+            actuator_gain_multiplier_range=(0.75, 1.25),
+            actuator_bias_multiplier_range=(0.75, 1.25),
+            geom_friction_slide_range=(0.4, 1.2),
+            gravity_z_range=(-10.5, -8.8),
+        ),
+    )
+)
+
+obs, info = env.reset(seed=1)
+print(info["domain_randomization"])
+```
+
+Use `model_factory` for changes that are baked into the compiled model, such as
+scale, node locations, topology, or `TrussPhysicalParameters` used while
+building the XML:
+
+```python
+import numpy as np
+
+from mujoco_truss_gen import (
+    DomainRandomizationConfig,
+    MujocoTrussEnv,
+    TrussEnvConfig,
+    TrussPhysicalParameters,
+    get_mujoco_spec,
+)
+
+
+def randomized_model(rng: np.random.Generator):
+    scale = rng.uniform(0.75, 1.25)
+    params = TrussPhysicalParameters(
+        active_node_mass=rng.uniform(0.005, 0.02),
+        passive_node_mass=rng.uniform(0.005, 0.02),
+        realistic_actuator_kp=rng.uniform(700.0, 1300.0),
+    )
+    return get_mujoco_spec(
+        "octahedron",
+        realistic=True,
+        scale=scale,
+        physical_params=params,
+    )
+
+
+env = MujocoTrussEnv(
+    TrussEnvConfig(
+        get_mujoco_spec("octahedron", realistic=True),
+        domain_randomization=DomainRandomizationConfig(
+            model_factory=randomized_model,
+            geom_friction_slide_range=(0.4, 1.2),
+        ),
+    )
+)
+```
+
+When using vectorized Gymnasium environments, give each worker the same
+randomization config. Each worker samples independently at reset, while the
+vectorized setup provides parallel training throughput.
 
 ## Step and Reset Behavior
 

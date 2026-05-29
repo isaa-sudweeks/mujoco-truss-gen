@@ -167,7 +167,9 @@ quit
   bisector controller keeps each rod aligned with the projected angle bisector
   of the adjacent edges. In routed shape dictionaries, passive route endpoints
   are rendered as cylinders with their flat-face normal aligned to the connector
-  rod and diameter matched to the edge tendon width.
+  rod and diameter matched to the edge tendon width. The routed-tube
+  `realistic=True` path is still incomplete and should be treated as a known
+  modeling limitation until the routed connector/body geometry is fixed.
 
 Realistic triangle models include one accelerometer sensor per generated node
 site by default. Pass `accelerometer_config=AccelerometerConfig(...)` to

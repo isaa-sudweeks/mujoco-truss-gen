@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from mujoco_truss_gen.base_env import MujocoTrussEnv, TrussEnvConfig
+from mujoco_truss_gen.base_env import (
+    DomainRandomizationConfig,
+    MujocoTrussEnv,
+    TrussEnvConfig,
+)
 from mujoco_truss_gen.mesh_import import stl_to_shape_dict
 from mujoco_truss_gen.mujoco_model import (
     DEFAULT_ACCELEROMETER_CONFIG,
@@ -34,6 +38,7 @@ from mujoco_truss_gen.velocity_command_env import MujocoVelocityCommandEnv
 __all__ = [
     "AccelerometerConfig",
     "DEFAULT_ACCELEROMETER_CONFIG",
+    "DomainRandomizationConfig",
     "MujocoModel",
     "MujocoNodeVelocityCommandEnv",
     "MujocoRelativeObsEnv",

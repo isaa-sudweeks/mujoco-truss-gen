@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +15,33 @@ try:
     import mujoco.viewer as mujoco_viewer
 except ImportError:
     mujoco_viewer = None
+
+
+Range = tuple[float, float]
+ModelFactory = Callable[[np.random.Generator], ModelSource]
+
+
+@dataclass(slots=True)
+class DomainRandomizationConfig:
+    """Per-episode domain randomization for Gymnasium truss environments.
+
+    ``model_factory`` is called on every reset and should return a fresh model
+    source. Use it for scale, topology, geometry, or physical parameters that
+    are baked into the compiled MuJoCo model.
+
+    The remaining fields mutate the compiled ``mujoco.MjModel`` at reset time.
+    They are sampled independently and restored from nominal model values before
+    each new sample is applied.
+    """
+
+    model_factory: ModelFactory | None = None
+    body_mass_multiplier_range: Range | None = None
+    body_inertia_multiplier_range: Range | None = None
+    dof_damping_multiplier_range: Range | None = None
+    actuator_gain_multiplier_range: Range | None = None
+    actuator_bias_multiplier_range: Range | None = None
+    geom_friction_slide_range: Range | None = None
+    gravity_z_range: Range | None = None
 
 
 @dataclass(slots=True)
@@ -34,6 +62,7 @@ class TrussEnvConfig:
     control_noise_std: float = 0.0
     control_noise_relative: bool = True
     runtime_apply_control_noise: bool = False
+    domain_randomization: DomainRandomizationConfig | None = None
 
 
 class MujocoTrussEnv(gym.Env):
@@ -53,6 +82,7 @@ class MujocoTrussEnv(gym.Env):
         self.render_mode = render_mode
         self.rank = rank
         self.mj_model = MujocoModel(self.config.model_source)
+        self._runtime_nominals: dict[str, np.ndarray] = {}
 
         self.viewer = None
         self.renderer = None
@@ -65,15 +95,153 @@ class MujocoTrussEnv(gym.Env):
             bool(self.config.runtime_apply_control_noise) and self.control_noise_std > 0.0
         )
 
+        self._on_model_changed()
+
+    def reset(self, seed: int | None = None, options: dict[str, Any] | None = None):
+        super().reset(seed=seed)
+        randomization_info = self._randomize_domain()
+        self.mj_model.reset(self.np_random)
+        self.steps = 0
+        return self._get_obs(), {"domain_randomization": randomization_info}
+
+    def _on_model_changed(self) -> None:
+        self._capture_runtime_nominals()
         self._set_render_fps()
         self._define_action_space()
         self._define_observation_space()
 
-    def reset(self, seed: int | None = None, options: dict[str, Any] | None = None):
-        super().reset(seed=seed)
-        self.mj_model.reset(self.np_random)
-        self.steps = 0
-        return self._get_obs(), {}
+    def _randomize_domain(self) -> dict[str, float]:
+        randomization = self.config.domain_randomization
+        if randomization is None:
+            return {}
+
+        if randomization.model_factory is not None:
+            self._replace_model(randomization.model_factory(self.np_random))
+        else:
+            self._restore_runtime_nominals()
+
+        return self._apply_runtime_domain_randomization(randomization)
+
+    def _replace_model(self, model_source: ModelSource) -> None:
+        if self.viewer is not None:
+            self.viewer.close()
+            self.viewer = None
+
+        if self.renderer is not None:
+            self.renderer.close()
+            self.renderer = None
+
+        self.mj_model = MujocoModel(model_source)
+        self._on_model_changed()
+
+    def _capture_runtime_nominals(self) -> None:
+        model = self.mj_model.model
+        self._runtime_nominals = {
+            "body_mass": model.body_mass.copy(),
+            "body_inertia": model.body_inertia.copy(),
+            "dof_damping": model.dof_damping.copy(),
+            "actuator_gainprm": model.actuator_gainprm.copy(),
+            "actuator_biasprm": model.actuator_biasprm.copy(),
+            "geom_friction": model.geom_friction.copy(),
+            "gravity": model.opt.gravity.copy(),
+        }
+
+    def _restore_runtime_nominals(self) -> None:
+        if not self._runtime_nominals:
+            return
+
+        model = self.mj_model.model
+        model.body_mass[:] = self._runtime_nominals["body_mass"]
+        model.body_inertia[:] = self._runtime_nominals["body_inertia"]
+        model.dof_damping[:] = self._runtime_nominals["dof_damping"]
+        model.actuator_gainprm[:] = self._runtime_nominals["actuator_gainprm"]
+        model.actuator_biasprm[:] = self._runtime_nominals["actuator_biasprm"]
+        model.geom_friction[:] = self._runtime_nominals["geom_friction"]
+        model.opt.gravity[:] = self._runtime_nominals["gravity"]
+
+    def _apply_runtime_domain_randomization(
+        self,
+        randomization: DomainRandomizationConfig,
+    ) -> dict[str, float]:
+        self._restore_runtime_nominals()
+        model = self.mj_model.model
+        samples: dict[str, float] = {}
+
+        body_mass_multiplier = _sample_range(
+            self.np_random,
+            randomization.body_mass_multiplier_range,
+            "body_mass_multiplier_range",
+        )
+        if body_mass_multiplier is not None:
+            model.body_mass[:] = self._runtime_nominals["body_mass"] * body_mass_multiplier
+            samples["body_mass_multiplier"] = body_mass_multiplier
+
+        body_inertia_multiplier = _sample_range(
+            self.np_random,
+            randomization.body_inertia_multiplier_range,
+            "body_inertia_multiplier_range",
+        )
+        if body_inertia_multiplier is not None:
+            model.body_inertia[:] = (
+                self._runtime_nominals["body_inertia"] * body_inertia_multiplier
+            )
+            samples["body_inertia_multiplier"] = body_inertia_multiplier
+
+        dof_damping_multiplier = _sample_range(
+            self.np_random,
+            randomization.dof_damping_multiplier_range,
+            "dof_damping_multiplier_range",
+        )
+        if dof_damping_multiplier is not None:
+            model.dof_damping[:] = (
+                self._runtime_nominals["dof_damping"] * dof_damping_multiplier
+            )
+            samples["dof_damping_multiplier"] = dof_damping_multiplier
+
+        actuator_gain_multiplier = _sample_range(
+            self.np_random,
+            randomization.actuator_gain_multiplier_range,
+            "actuator_gain_multiplier_range",
+        )
+        if actuator_gain_multiplier is not None:
+            model.actuator_gainprm[:] = (
+                self._runtime_nominals["actuator_gainprm"] * actuator_gain_multiplier
+            )
+            samples["actuator_gain_multiplier"] = actuator_gain_multiplier
+
+        actuator_bias_multiplier = _sample_range(
+            self.np_random,
+            randomization.actuator_bias_multiplier_range,
+            "actuator_bias_multiplier_range",
+        )
+        if actuator_bias_multiplier is not None:
+            model.actuator_biasprm[:] = (
+                self._runtime_nominals["actuator_biasprm"] * actuator_bias_multiplier
+            )
+            samples["actuator_bias_multiplier"] = actuator_bias_multiplier
+
+        geom_friction_slide = _sample_range(
+            self.np_random,
+            randomization.geom_friction_slide_range,
+            "geom_friction_slide_range",
+        )
+        if geom_friction_slide is not None:
+            model.geom_friction[:, 0] = geom_friction_slide
+            samples["geom_friction_slide"] = geom_friction_slide
+
+        gravity_z = _sample_range(
+            self.np_random,
+            randomization.gravity_z_range,
+            "gravity_z_range",
+        )
+        if gravity_z is not None:
+            model.opt.gravity[2] = gravity_z
+            samples["gravity_z"] = gravity_z
+
+        if samples:
+            mujoco.mj_setConst(model, self.mj_model.data)
+
+        return samples
 
     def _get_obs(self) -> np.ndarray:
         node_positions = self.mj_model.get_node_position_matrix()
@@ -254,3 +422,17 @@ def _coerce_config(
         return TrussEnvConfig(**values)
 
     return TrussEnvConfig(model_source=model_source, **overrides)
+
+
+def _sample_range(
+    rng: np.random.Generator,
+    value_range: Range | None,
+    name: str,
+) -> float | None:
+    if value_range is None:
+        return None
+
+    low, high = (float(value_range[0]), float(value_range[1]))
+    if not np.isfinite(low) or not np.isfinite(high) or low > high:
+        raise ValueError(f"{name} must contain finite values with low <= high.")
+    return float(rng.uniform(low, high))

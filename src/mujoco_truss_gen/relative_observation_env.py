@@ -25,6 +25,8 @@ class MujocoRelativeObsEnv(MujocoTrussEnv):
         **config_overrides: Any,
     ):
         super().__init__(model_source, render_mode=render_mode, rank=rank, **config_overrides)
+
+    def _define_action_space(self) -> None:
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
