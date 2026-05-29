@@ -41,7 +41,7 @@ model = spec.compile()
 ## Routed Shape Dictionaries
 
 Continuous tube shapes can be represented with a shape dictionary. Each shape
-defines a routed path and the route edges that should be actuated:
+defines a routed path:
 
 ```python
 import numpy as np
@@ -74,14 +74,15 @@ model = spec.compile()
 ```
 
 The route creates one edge tendon for each adjacent node pair in the path.
-Active edges receive actuators. A route-length equality constraint keeps the
-total routed length constant, so non-actuated passive edges absorb length
-changes caused by the active edges. Routed shape dictionaries currently support
-`realistic=False`.
+Every unique route edge receives an actuator. Routed continuous-tube models do
+not use route-length equality constraints, so they can run without MuJoCo tendon
+constraints. Route tendons are still emitted as non-actuated route metadata and
+visual tendons.
 
-`get_mujoco_spec()` and `build_triangle()` treat caller-provided dictionaries as
-read-only inputs. The realistic builder clones shared nodes internally, but it
-does not mutate the original `node_dict` or `triangle_dict` passed by the caller.
+`get_mujoco_spec()`, `build_triangle()`, and `build_shapes()` treat caller-provided
+dictionaries as read-only inputs. Realistic builders clone shared nodes
+internally, but they do not mutate the original dictionaries passed by the
+caller.
 
 ## Public Generation Helpers
 
@@ -91,7 +92,9 @@ does not mutate the original `node_dict` or `triangle_dict` passed by the caller
   bodies, sites, tendons, actuators, and perimeter constraints to an existing
   spec.
 - `build_shapes(spec, node_dict, shape_dict, realistic=False)` adds routed
-  continuous-tube shapes with per-edge tendons and route-length constraints.
+  continuous-tube shapes with unconstrained per-edge tendon actuators. With
+  `realistic=True`, shared routed node occurrences are cloned and connected to
+  connector balls by in-plane bisector rods.
 - `get_mujoco_spec("octahedron", realistic=False, scale=1.0)` and the other
   names in `PRESETS` build built-in presets. Increase or decrease `scale` to
   generate the same preset in a different unit scale.
@@ -109,6 +112,28 @@ does not mutate the original `node_dict` or `triangle_dict` passed by the caller
   resolved path.
 - `view(spec)` compiles and opens the generated model in MuJoCo's passive
   viewer.
+- `view_node_velocity_terminal(spec, speed=0.01)` opens a routed
+  continuous-tube model in MuJoCo's passive viewer and accepts terminal commands
+  that set node-level scalar velocity commands. Those node commands are mapped
+  to routed tendon actuator commands each simulation step.
+
+```python
+from mujoco_truss_gen import get_mujoco_spec, view_node_velocity_terminal
+
+spec = get_mujoco_spec("tetrahedron", realistic=False)
+view_node_velocity_terminal(spec)
+```
+
+Example terminal commands:
+
+```text
+nodes
+set node_2 0.01
+add node_2 -0.002
+show
+zero
+quit
+```
 
 ## Input Expectations
 
@@ -121,7 +146,8 @@ does not mutate the original `node_dict` or `triangle_dict` passed by the caller
 - Custom triangle definitions are validated before MuJoCo objects are created,
   and validation errors name the node, triangle, or shape entry that needs to be
   fixed.
-- Shape entries must contain `route` and `active_edges` keys.
+- Shape entries must contain `route` and `active_edges` keys. `active_edges` is
+  accepted for compatibility, but all adjacent route edges are actuated.
 - Shape routes must contain at least two node names. Each active edge must be an
   adjacent pair in the route.
 - The builder helpers should be used when environment rigidity and slip helpers
@@ -133,11 +159,17 @@ does not mutate the original `node_dict` or `triangle_dict` passed by the caller
 - `realistic=False` creates one world-body per node with slide joints on `x`,
   `y`, and `z`. This is the simpler abstract model and is useful for fast
   algorithm development.
-- `realistic=True` creates one free triangle body per triangle, clones shared
-  triangle nodes inside the generated model, and connects shared vertices through
-  connector balls. Shared-node boxes are face-aligned toward their connector rod,
-  so the visible box face and rod direction represent the intended module
-  connection geometry.
+- `realistic=True` creates one free triangle body per triangle for triangle
+  dictionaries. For routed shape dictionaries, it creates direct world-level
+  cloned route node bodies rather than a shared plane parent. In both cases,
+  shared logical nodes are connected through connector balls. Connector rods are
+  initialized in the original local route or triangle plane, and the internal
+  bisector controller keeps each rod aligned with the projected angle bisector
+  of the adjacent edges. In routed shape dictionaries, passive route endpoints
+  are rendered as cylinders with their flat-face normal aligned to the connector
+  rod and diameter matched to the edge tendon width. The routed-tube
+  `realistic=True` path is still incomplete and should be treated as a known
+  modeling limitation until the routed connector/body geometry is fixed.
 
 Realistic triangle models include one accelerometer sensor per generated node
 site by default. Pass `accelerometer_config=AccelerometerConfig(...)` to

@@ -43,6 +43,7 @@ def add_planar_node_body(
     connector_direction: Vector | None = None,
     mass: float = NODE_MASS,
     box_size: list[float] | tuple[float, float, float] = BOX_SIZE,
+    hinge_damping: float = 0.0,
 ) -> Any:
     node_body = parent_body.add_body(name=node_name, pos=local_position)
     node_body.add_site(name=node_name)
@@ -83,22 +84,223 @@ def add_planar_node_body(
         name=f"{node_name}_z_hinge",
         axis=[0.0, 0.0, 1.0],
         pos=[0.0, 0.0, 0.0],
+        damping=hinge_damping,
     )
 
     return node_body
 
 
-def _face_normal_quat(connector_direction: Vector) -> list[float]:
+def add_routed_node_body(
+    spec: mujoco.MjSpec,
+    node_name: str,
+    position: Vector,
+    hinge_axis: Vector,
+    connector_direction: Vector | None = None,
+    mass: float = NODE_MASS,
+    box_size: list[float] | tuple[float, float, float] = BOX_SIZE,
+    passive: bool = False,
+    edge_tendon_width: float | None = None,
+    hinge_damping: float = 0.0,
+) -> Any:
+    node_body = spec.worldbody.add_body(name=node_name, pos=position)
+    node_body.add_site(name=node_name)
+    if passive:
+        node_geom = _add_passive_cylinder_geom(
+            node_body,
+            mass=mass,
+            connector_direction=connector_direction,
+            up_axis=hinge_axis,
+            box_size=box_size,
+            edge_tendon_width=edge_tendon_width,
+        )
+    else:
+        node_geom = node_body.add_geom(
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=box_size,
+            rgba=NODE_RGBA,
+            material=NODE_MATERIAL,
+            mass=mass,
+        )
+        if connector_direction is not None:
+            node_geom.quat = _face_normal_quat(connector_direction, hinge_axis)
+    disable_geom_contacts(node_geom)
+
+    for suffix, axis in (
+        ("x", [1.0, 0.0, 0.0]),
+        ("y", [0.0, 1.0, 0.0]),
+        ("z", [0.0, 0.0, 1.0]),
+    ):
+        node_body.add_joint(
+            type=mujoco.mjtJoint.mjJNT_SLIDE,
+            name=f"{node_name}_{suffix}",
+            pos=[0.0, 0.0, 0.0],
+            axis=axis,
+        )
+
+    node_body.add_joint(
+        type=mujoco.mjtJoint.mjJNT_HINGE,
+        name=f"{node_name}_z_hinge",
+        axis=hinge_axis,
+        pos=[0.0, 0.0, 0.0],
+        damping=hinge_damping,
+    )
+
+    return node_body
+
+
+def _add_passive_cylinder_geom(
+    node_body: Any,
+    *,
+    mass: float,
+    connector_direction: Vector | None,
+    up_axis: Vector,
+    box_size: list[float] | tuple[float, float, float],
+    edge_tendon_width: float | None,
+) -> Any:
+    radius = edge_tendon_width if edge_tendon_width is not None else BOX_SIZE[0]
+    half_length = float(box_size[0])
+    node_geom = node_body.add_geom(
+        type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+        size=[radius, half_length],
+        rgba=NODE_RGBA,
+        material=NODE_MATERIAL,
+        mass=mass,
+    )
+    if connector_direction is not None:
+        node_geom.quat = _flat_face_normal_quat(connector_direction, up_axis)
+    return node_geom
+
+
+def _flat_face_normal_quat(
+    connector_direction: Vector,
+    up_axis: Vector = (0.0, 0.0, 1.0),
+) -> list[float]:
     direction = np.array(connector_direction, dtype=float)
-    planar_direction = direction[:2]
-    norm = float(np.linalg.norm(planar_direction))
-    if norm < 1e-10:
+    z_axis = _unit_vector(direction)
+    if z_axis is None:
         return [1.0, 0.0, 0.0, 0.0]
 
-    x_axis = planar_direction / norm
-    angle = float(np.arctan2(x_axis[1], x_axis[0]))
-    half_angle = 0.5 * angle
-    return [float(np.cos(half_angle)), 0.0, 0.0, float(np.sin(half_angle))]
+    x_axis = np.array(up_axis, dtype=float)
+    x_axis = x_axis - z_axis * float(np.dot(x_axis, z_axis))
+    x_axis = _unit_vector(x_axis)
+    if x_axis is None:
+        x_axis = _orthogonal_unit_vector(z_axis)
+
+    y_axis = _unit_vector(np.cross(z_axis, x_axis))
+    if y_axis is None:
+        return [1.0, 0.0, 0.0, 0.0]
+    x_axis = np.cross(y_axis, z_axis)
+    rotation_matrix = np.column_stack((x_axis, y_axis, z_axis))
+    return _matrix_to_quat(rotation_matrix)
+
+
+def _face_normal_quat(
+    connector_direction: Vector,
+    up_axis: Vector = (0.0, 0.0, 1.0),
+) -> list[float]:
+    direction = np.array(connector_direction, dtype=float)
+    x_axis = _unit_vector(direction)
+    if x_axis is None:
+        return [1.0, 0.0, 0.0, 0.0]
+
+    z_axis = np.array(up_axis, dtype=float)
+    z_axis = z_axis - x_axis * float(np.dot(z_axis, x_axis))
+    z_axis = _unit_vector(z_axis)
+    if z_axis is None:
+        z_axis = _orthogonal_unit_vector(x_axis)
+
+    y_axis = _unit_vector(np.cross(z_axis, x_axis))
+    if y_axis is None:
+        return [1.0, 0.0, 0.0, 0.0]
+    z_axis = np.cross(x_axis, y_axis)
+    rotation_matrix = np.column_stack((x_axis, y_axis, z_axis))
+    return _matrix_to_quat(rotation_matrix)
+
+
+def _unit_vector(vector: np.ndarray) -> np.ndarray | None:
+    norm = float(np.linalg.norm(vector))
+    if norm < 1e-10:
+        return None
+    return vector / norm
+
+
+def _orthogonal_unit_vector(axis: np.ndarray) -> np.ndarray:
+    candidate = np.array([1.0, 0.0, 0.0])
+    if abs(float(np.dot(axis, candidate))) > 0.9:
+        candidate = np.array([0.0, 1.0, 0.0])
+    orthogonal = candidate - axis * float(np.dot(candidate, axis))
+    unit = _unit_vector(orthogonal)
+    if unit is None:
+        return np.array([0.0, 0.0, 1.0])
+    return unit
+
+
+def _matrix_to_quat(rotation_matrix: np.ndarray) -> list[float]:
+    trace = float(np.trace(rotation_matrix))
+    if trace > 0.0:
+        s = 2.0 * np.sqrt(trace + 1.0)
+        quat = np.array(
+            [
+                0.25 * s,
+                (rotation_matrix[2, 1] - rotation_matrix[1, 2]) / s,
+                (rotation_matrix[0, 2] - rotation_matrix[2, 0]) / s,
+                (rotation_matrix[1, 0] - rotation_matrix[0, 1]) / s,
+            ]
+        )
+    else:
+        diagonal_index = int(np.argmax(np.diag(rotation_matrix)))
+        if diagonal_index == 0:
+            s = 2.0 * np.sqrt(
+                1.0
+                + rotation_matrix[0, 0]
+                - rotation_matrix[1, 1]
+                - rotation_matrix[2, 2]
+            )
+            quat = np.array(
+                [
+                    (rotation_matrix[2, 1] - rotation_matrix[1, 2]) / s,
+                    0.25 * s,
+                    (rotation_matrix[0, 1] + rotation_matrix[1, 0]) / s,
+                    (rotation_matrix[0, 2] + rotation_matrix[2, 0]) / s,
+                ]
+            )
+        elif diagonal_index == 1:
+            s = 2.0 * np.sqrt(
+                1.0
+                + rotation_matrix[1, 1]
+                - rotation_matrix[0, 0]
+                - rotation_matrix[2, 2]
+            )
+            quat = np.array(
+                [
+                    (rotation_matrix[0, 2] - rotation_matrix[2, 0]) / s,
+                    (rotation_matrix[0, 1] + rotation_matrix[1, 0]) / s,
+                    0.25 * s,
+                    (rotation_matrix[1, 2] + rotation_matrix[2, 1]) / s,
+                ]
+            )
+        else:
+            s = 2.0 * np.sqrt(
+                1.0
+                + rotation_matrix[2, 2]
+                - rotation_matrix[0, 0]
+                - rotation_matrix[1, 1]
+            )
+            quat = np.array(
+                [
+                    (rotation_matrix[1, 0] - rotation_matrix[0, 1]) / s,
+                    (rotation_matrix[0, 2] + rotation_matrix[2, 0]) / s,
+                    (rotation_matrix[1, 2] + rotation_matrix[2, 1]) / s,
+                    0.25 * s,
+                ]
+            )
+
+    unit_quat = _unit_vector(quat)
+    if unit_quat is None:
+        return [1.0, 0.0, 0.0, 0.0]
+    if unit_quat[0] < 0.0:
+        unit_quat = -unit_quat
+    return unit_quat.tolist()
 
 
 def add_free_node_body(
@@ -254,6 +456,54 @@ def connect_node_to_ball(
     constraint.solimp = params.connect_constraint_solimp
 
 
+def connect_routed_node_to_ball(
+    spec: mujoco.MjSpec,
+    node_body: Any,
+    instance_name: str,
+    ball: Any,
+    original_name: str,
+    node_dict: NodeDict,
+    physical_params: TrussPhysicalParameters | None = None,
+) -> None:
+    params = physical_params or TrussPhysicalParameters()
+    ball_position = np.array(ball.pos, dtype=float)
+    node_position = np.array(node_dict[instance_name], dtype=float)
+    rod_vector = ball_position - node_position
+
+    rod = node_body.add_body(name=f"rod_{instance_name}", pos=[0.0, 0.0, 0.0])
+    rod.add_site(name=f"tip_site_{instance_name}", pos=rod_vector.tolist())
+    rod_geom = rod.add_geom(
+        type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+        fromto=[0.0, 0.0, 0.0, *rod_vector.tolist()],
+        size=[params.rod_radius],
+        rgba=ROD_RGBA,
+        material=ROD_MATERIAL,
+        mass=params.rod_mass,
+    )
+    disable_geom_contacts(rod_geom)
+
+    actuator = spec.add_actuator(
+        name=angle_bisector_actuator_name(instance_name),
+        trntype=mujoco.mjtTrn.mjTRN_JOINT,
+        target=f"{instance_name}_z_hinge",
+        ctrllimited=True,
+        ctrlrange=params.hinge_ctrl_range,
+        forcelimited=True,
+        forcerange=params.hinge_force_range,
+    )
+    actuator.set_to_position(kp=params.hinge_position_kp)
+
+    constraint = spec.add_equality(
+        name=f"connect_{instance_name}",
+        type=mujoco.mjtEq.mjEQ_CONNECT,
+        objtype=mujoco.mjtObj.mjOBJ_SITE,
+    )
+    constraint.name1 = f"tip_site_{instance_name}"
+    constraint.name2 = f"ball_site_{original_name}"
+    constraint.solref = params.connect_constraint_solref
+    constraint.solimp = params.connect_constraint_solimp
+
+
 def create_triangle_bodies(
     spec: mujoco.MjSpec,
     original_node_dict: dict[str, np.ndarray],
@@ -312,6 +562,7 @@ def create_triangle_bodies(
                 connector_direction=connector_direction,
                 mass=_node_mass(instance_name, triangle_nodes, params),
                 box_size=params.box_size,
+                hinge_damping=params.hinge_damping,
             )
 
             if not original_name or original_name not in connector_balls:

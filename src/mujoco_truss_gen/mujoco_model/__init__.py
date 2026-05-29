@@ -14,9 +14,15 @@ from mujoco_truss_gen.mujoco_model.builders import (
     get_mujoco_spec,
 )
 from mujoco_truss_gen.mujoco_model.constants import TrussPhysicalParameters
+from mujoco_truss_gen.mujoco_model.controllers import NodeVelocityController
 from mujoco_truss_gen.mujoco_model.geometry import get_perimeter, get_route_lengths
 from mujoco_truss_gen.mujoco_model.gnn_utilities import get_edge_index, get_node_features
-from mujoco_truss_gen.mujoco_model.io_viewer import save_xml, view
+from mujoco_truss_gen.mujoco_model.io_viewer import (
+    save_xml,
+    view,
+    view_node_velocity,
+    view_node_velocity_terminal,
+)
 from mujoco_truss_gen.mujoco_model.model import MujocoModel
 from mujoco_truss_gen.mujoco_model.presets import (
     PRESETS,
@@ -34,6 +40,7 @@ __all__ = [
     "AccelerometerConfig",
     "DEFAULT_ACCELEROMETER_CONFIG",
     "MujocoModel",
+    "NodeVelocityController",
     "PRESETS",
     "TrussPhysicalParameters",
     "build_abstract_shapes",
@@ -55,4 +62,6 @@ __all__ = [
     "get_route_lengths",
     "save_xml",
     "view",
+    "view_node_velocity",
+    "view_node_velocity_terminal",
 ]

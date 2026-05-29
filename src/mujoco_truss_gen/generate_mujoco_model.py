@@ -42,7 +42,7 @@ from mujoco_truss_gen.mujoco_model.geometry import (
     get_route_lengths,
     triangle_frame,
 )
-from mujoco_truss_gen.mujoco_model.io_viewer import save_xml, view
+from mujoco_truss_gen.mujoco_model.io_viewer import save_xml, view, view_node_velocity
 from mujoco_truss_gen.mujoco_model.model_types import (
     EdgeKey,
     EdgeTendonMap,
@@ -145,6 +145,7 @@ __all__ = [
     "save_xml",
     "unique_actuator_name",
     "view",
+    "view_node_velocity",
 ]
 
 

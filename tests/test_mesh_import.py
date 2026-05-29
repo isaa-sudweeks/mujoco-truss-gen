@@ -72,7 +72,7 @@ def test_stl_to_shape_dict_returns_routed_shape_dict(monkeypatch: pytest.MonkeyP
     spec.compile()
 
 
-def test_hand_authored_routed_shape_keeps_route_length_constraint() -> None:
+def test_hand_authored_routed_shape_omits_route_length_constraint() -> None:
     node_dict = {
         "node_1": [0.0, 0.0, 0.2],
         "node_2": [0.8, 0.0, 0.2],
@@ -88,7 +88,7 @@ def test_hand_authored_routed_shape_keeps_route_length_constraint() -> None:
 
     root = ET.fromstring(get_mujoco_spec(node_dict, shape_dict, realistic=False).to_xml())
 
-    assert root.find(".//equality/tendon[@name='Route_Length_Constraint_quad_1']") is not None
+    assert root.find(".//equality/tendon[@name='Route_Length_Constraint_quad_1']") is None
 
 
 def test_stl_import_scales_tendon_limits_to_imported_edge_lengths(
