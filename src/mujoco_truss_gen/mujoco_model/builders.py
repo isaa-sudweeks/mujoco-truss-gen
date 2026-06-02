@@ -423,6 +423,7 @@ def build_realistic_shapes(
             original_name=original_name,
             node_dict=node_dict,
             physical_params=params,
+            control_angular_hinge=is_passive,
         )
 
     edge_tendons: EdgeTendonMap = {}

@@ -8,6 +8,7 @@ import numpy as np
 
 from mujoco_truss_gen.mujoco_model.controllers import (
     ANGLE_BISECTOR_ACTUATOR_PREFIX,
+    ANGULAR_BISECTOR_ACTUATOR_PREFIX,
     AngleBisectorController,
 )
 from mujoco_truss_gen.mujoco_model.tendons import initialize_actuator_lengths
@@ -55,7 +56,10 @@ class MujocoModel:
                 actuator_id
                 for actuator_id in range(self.model.nu)
                 if self.model.actuator(actuator_id).name.startswith(
-                    ANGLE_BISECTOR_ACTUATOR_PREFIX
+                    (
+                        ANGLE_BISECTOR_ACTUATOR_PREFIX,
+                        ANGULAR_BISECTOR_ACTUATOR_PREFIX,
+                    )
                 )
             ],
             dtype=int,

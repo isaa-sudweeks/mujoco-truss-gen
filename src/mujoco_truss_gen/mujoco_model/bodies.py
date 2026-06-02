@@ -18,7 +18,10 @@ from mujoco_truss_gen.mujoco_model.constants import (
     ROD_RGBA,
     TrussPhysicalParameters,
 )
-from mujoco_truss_gen.mujoco_model.controllers import angle_bisector_actuator_name
+from mujoco_truss_gen.mujoco_model.controllers import (
+    angle_bisector_actuator_name,
+    angular_bisector_actuator_name,
+)
 from mujoco_truss_gen.mujoco_model.geometry import triangle_frame
 from mujoco_truss_gen.mujoco_model.model_types import NodeDict, TriangleDict, Vector
 
@@ -144,6 +147,19 @@ def add_routed_node_body(
         pos=[0.0, 0.0, 0.0],
         damping=hinge_damping,
     )
+    angular_axis = (
+        _angular_hinge_axis(hinge_axis, connector_direction)
+        if passive and connector_direction is not None
+        else None
+    )
+    if angular_axis is not None:
+        node_body.add_joint(
+            type=mujoco.mjtJoint.mjJNT_HINGE,
+            name=f"{node_name}_angular_hinge",
+            axis=angular_axis.tolist(),
+            pos=[0.0, 0.0, 0.0],
+            damping=hinge_damping,
+        )
 
     return node_body
 
@@ -192,6 +208,22 @@ def _flat_face_normal_quat(
     x_axis = np.cross(y_axis, z_axis)
     rotation_matrix = np.column_stack((x_axis, y_axis, z_axis))
     return _matrix_to_quat(rotation_matrix)
+
+
+def _angular_hinge_axis(
+    hinge_axis: Vector,
+    connector_direction: Vector,
+) -> np.ndarray | None:
+    normal = _unit_vector(np.array(hinge_axis, dtype=float))
+    direction = _unit_vector(np.array(connector_direction, dtype=float))
+    if normal is None or direction is None:
+        return None
+
+    axis = _unit_vector(np.cross(normal, direction))
+    if axis is not None:
+        return axis
+
+    return _orthogonal_unit_vector(normal)
 
 
 def _face_normal_quat(
@@ -464,6 +496,7 @@ def connect_routed_node_to_ball(
     original_name: str,
     node_dict: NodeDict,
     physical_params: TrussPhysicalParameters | None = None,
+    control_angular_hinge: bool = False,
 ) -> None:
     params = physical_params or TrussPhysicalParameters()
     ball_position = np.array(ball.pos, dtype=float)
@@ -492,6 +525,18 @@ def connect_routed_node_to_ball(
         forcerange=params.hinge_force_range,
     )
     actuator.set_to_position(kp=params.hinge_position_kp)
+
+    if control_angular_hinge:
+        angular_actuator = spec.add_actuator(
+            name=angular_bisector_actuator_name(instance_name),
+            trntype=mujoco.mjtTrn.mjTRN_JOINT,
+            target=f"{instance_name}_angular_hinge",
+            ctrllimited=True,
+            ctrlrange=params.hinge_ctrl_range,
+            forcelimited=True,
+            forcerange=params.hinge_force_range,
+        )
+        angular_actuator.set_to_position(kp=params.hinge_position_kp)
 
     constraint = spec.add_equality(
         name=f"connect_{instance_name}",

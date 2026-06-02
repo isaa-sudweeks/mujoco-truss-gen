@@ -1172,6 +1172,7 @@ def test_realistic_routed_passive_cylinders_face_connector_rods() -> None:
         hinge_joint = node_body.find(f"./joint[@name='{node_name}_z_hinge']")
         assert hinge_joint is not None
         assert float(hinge_joint.get("damping", "nan")) == pytest.approx(HINGE_DAMPING)
+        angular_hinge = node_body.find(f"./joint[@name='{node_name}_angular_hinge']")
 
         rod_body = node_body.find(f"./body[@name='rod_{node_name}']")
         assert rod_body is not None
@@ -1196,6 +1197,19 @@ def test_realistic_routed_passive_cylinders_face_connector_rods() -> None:
             1.0,
             abs=1e-5,
         )
+        angular_actuator = root.find(
+            f"./actuator/general[@name='bisector_angular_act_{node_name}']"
+        )
+        if node_name in passive_nodes:
+            assert angular_hinge is not None
+            assert float(angular_hinge.get("damping", "nan")) == pytest.approx(
+                HINGE_DAMPING
+            )
+            assert angular_actuator is not None
+            assert angular_actuator.get("joint") == f"{node_name}_angular_hinge"
+        else:
+            assert angular_hinge is None
+            assert angular_actuator is None
 
 
 def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
@@ -1220,11 +1234,6 @@ def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
             )
             target_direction = bisector
             expected_dot = -1.0
-        planar_target = target_direction - target.hinge_axis * float(
-            np.dot(target_direction, target.hinge_axis)
-        )
-        planar_target = _unit(planar_target)
-
         tip_site_id = mujoco.mj_name2id(
             model.model,
             mujoco.mjtObj.mjOBJ_SITE,
@@ -1232,11 +1241,22 @@ def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
         )
         rod_direction = _unit(model.data.site_xpos[tip_site_id] - node_pos)
 
-        assert float(np.dot(rod_direction, planar_target)) == pytest.approx(
-            expected_dot,
-            abs=1e-4,
-        )
-        assert abs(float(np.dot(rod_direction, target.hinge_axis))) < 1e-6
+        if target.angular_actuator_id is not None:
+            assert len(neighbor_positions) == 1
+            assert float(np.dot(rod_direction, target_direction)) == pytest.approx(
+                1.0,
+                abs=1e-4,
+            )
+        else:
+            planar_target = target_direction - target.hinge_axis * float(
+                np.dot(target_direction, target.hinge_axis)
+            )
+            planar_target = _unit(planar_target)
+            assert float(np.dot(rod_direction, planar_target)) == pytest.approx(
+                expected_dot,
+                abs=1e-4,
+            )
+            assert abs(float(np.dot(rod_direction, target.hinge_axis))) < 1e-6
 
 
 def test_node_velocity_controller_maps_node_commands_to_edge_commands() -> None:

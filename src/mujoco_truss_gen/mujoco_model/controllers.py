@@ -9,6 +9,7 @@ import mujoco
 import numpy as np
 
 ANGLE_BISECTOR_ACTUATOR_PREFIX = "bisector_act_"
+ANGULAR_BISECTOR_ACTUATOR_PREFIX = "bisector_angular_act_"
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,12 +17,14 @@ class AngleBisectorTarget:
     node_name: str
     neighbor_names: tuple[str, ...]
     actuator_id: int
+    angular_actuator_id: int | None
     node_body_id: int
     parent_body_id: int
     node_site_id: int
     neighbor_site_ids: tuple[int, ...]
     initial_rod_vector: np.ndarray
     hinge_axis: np.ndarray
+    angular_hinge_axis: np.ndarray | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +78,29 @@ class AngleBisectorController:
                 continue
 
             data.ctrl[target.actuator_id] = angle
+
+            if target.angular_actuator_id is None or target.angular_hinge_axis is None:
+                continue
+
+            yawed_rod = _rotate_about_axis(
+                target.initial_rod_vector,
+                target.hinge_axis,
+                angle,
+            )
+            yawed_angular_axis = _rotate_about_axis(
+                target.angular_hinge_axis,
+                target.hinge_axis,
+                angle,
+            )
+            angular_angle = _signed_angle_about_axis(
+                yawed_rod,
+                target_parent,
+                yawed_angular_axis,
+            )
+            if angular_angle is None:
+                continue
+
+            data.ctrl[target.angular_actuator_id] = angular_angle
 
     @classmethod
     def _targets_from_xml(
@@ -140,12 +166,14 @@ class AngleBisectorController:
                         node_name=node_name,
                         neighbor_names=(neighbor_names[0], neighbor_names[1]),
                         actuator_id=actuator_id,
+                        angular_actuator_id=None,
                         node_body_id=node_body_id,
                         parent_body_id=parent_body_id,
                         node_site_id=node_site_id,
                         neighbor_site_ids=(neighbor_site_ids[0], neighbor_site_ids[1]),
                         initial_rod_vector=initial_rod_vector,
                         hinge_axis=hinge_axis,
+                        angular_hinge_axis=None,
                     )
                 )
 
@@ -167,6 +195,11 @@ class AngleBisectorController:
                 mujoco.mjtObj.mjOBJ_ACTUATOR,
                 angle_bisector_actuator_name(node_name),
             )
+            angular_actuator_id = mujoco.mj_name2id(
+                model,
+                mujoco.mjtObj.mjOBJ_ACTUATOR,
+                angular_bisector_actuator_name(node_name),
+            )
             node_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, node_name)
             node_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, node_name)
             neighbor_site_ids = tuple(
@@ -187,12 +220,18 @@ class AngleBisectorController:
                     node_name=node_name,
                     neighbor_names=neighbor_names,
                     actuator_id=actuator_id,
+                    angular_actuator_id=angular_actuator_id
+                    if len(neighbor_names) == 1 and angular_actuator_id >= 0
+                    else None,
                     node_body_id=node_body_id,
                     parent_body_id=parent_body_id,
                     node_site_id=node_site_id,
                     neighbor_site_ids=neighbor_site_ids,
                     initial_rod_vector=initial_rod_vector,
                     hinge_axis=_hinge_axis(node_body, node_name),
+                    angular_hinge_axis=_angular_hinge_axis(node_body, node_name)
+                    if len(neighbor_names) == 1
+                    else None,
                 )
             )
 
@@ -297,6 +336,10 @@ class NodeVelocityController:
 
 def angle_bisector_actuator_name(node_name: str) -> str:
     return f"{ANGLE_BISECTOR_ACTUATOR_PREFIX}{node_name}"
+
+
+def angular_bisector_actuator_name(node_name: str) -> str:
+    return f"{ANGULAR_BISECTOR_ACTUATOR_PREFIX}{node_name}"
 
 
 def _route_node_paths_from_xml(xml: str | None, site_to_node: dict[str, str]) -> list[list[str]]:
@@ -452,6 +495,17 @@ def _hinge_axis(node_body: ET.Element, node_name: str) -> np.ndarray:
     return unit
 
 
+def _angular_hinge_axis(node_body: ET.Element, node_name: str) -> np.ndarray | None:
+    joint = node_body.find(f"./joint[@name='{node_name}_angular_hinge']")
+    if joint is None:
+        return None
+
+    axis = np.fromstring(joint.get("axis", ""), sep=" ", dtype=float)
+    if axis.size != 3:
+        return None
+    return _unit_vector(axis)
+
+
 def _route_target_neighbors_from_xml(root: ET.Element) -> dict[str, tuple[str, ...]]:
     tendon_root = root.find("tendon")
     if tendon_root is None:
@@ -509,3 +563,14 @@ def _signed_angle_about_axis(
     signed_cross = float(np.dot(axis_unit, cross))
     dot = float(np.clip(np.dot(from_unit, to_unit), -1.0, 1.0))
     return math.atan2(signed_cross, dot)
+
+
+def _rotate_about_axis(vector: np.ndarray, axis: np.ndarray, angle: float) -> np.ndarray:
+    axis_unit = _unit_vector(axis)
+    if axis_unit is None:
+        return vector
+    return (
+        vector * math.cos(angle)
+        + np.cross(axis_unit, vector) * math.sin(angle)
+        + axis_unit * float(np.dot(axis_unit, vector)) * (1.0 - math.cos(angle))
+    )
