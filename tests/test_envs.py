@@ -112,6 +112,7 @@ def test_forward_reward_is_scaled_by_initial_bounding_box_diagonal() -> None:
             rigidity_weight=0.0,
             slip_weight=0.0,
             critical_eig_threshold=0.0,
+            max_forward_velocity=None,
         )
     )
     try:
@@ -126,6 +127,192 @@ def test_forward_reward_is_scaled_by_initial_bounding_box_diagonal() -> None:
         np.testing.assert_allclose(info["forward"], expected_forward)
         np.testing.assert_allclose(reward, expected_forward)
         assert not terminated
+    finally:
+        env.close()
+
+
+def test_collapse_terminal_step_suppresses_unstable_positive_forward_reward() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=False),
+            forward_weight=3.0,
+            energy_weight=0.0,
+            alive_bonus=0.25,
+            rigidity_weight=5.0,
+            slip_weight=0.5,
+            critical_eig_threshold=0.03,
+            max_forward_velocity=1.0,
+            collapse_penalty=2.0,
+        )
+    )
+    try:
+        env.mj_model.get_node_position_matrix = lambda: np.array(
+            [[10.0, 0.0, 0.0], [10.0, 0.0, 0.0]],
+            dtype=float,
+        )
+        env.mj_model.collapse_check = lambda: 0.0
+        env.mj_model.get_slip_penalty = lambda height: 50.0
+
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        reward, info, terminated = env._compute_reward(action, np.zeros(3, dtype=float))
+
+        assert terminated
+        assert info["terminated_by_collapse"]
+        assert info["forward_velocity_raw"] > env.config.max_forward_velocity
+        assert info["forward_velocity"] == pytest.approx(0.0)
+        assert info["forward"] == pytest.approx(0.0)
+        assert info["alive"] == pytest.approx(0.0)
+        assert info["rigidity"] == pytest.approx(0.0)
+        assert info["slip"] == pytest.approx(0.0)
+        assert info["collapse_penalty"] == pytest.approx(-2.0)
+        assert reward == pytest.approx(-2.0)
+    finally:
+        env.close()
+
+
+def test_nonfinite_terminal_diagnostics_do_not_make_reward_nonfinite() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=False),
+            forward_weight=3.0,
+            energy_weight=0.0,
+            alive_bonus=0.25,
+            rigidity_weight=5.0,
+            slip_weight=0.5,
+            critical_eig_threshold=0.03,
+            max_forward_velocity=1.0,
+            collapse_penalty=1.5,
+        )
+    )
+    try:
+        env.mj_model.get_node_position_matrix = lambda: np.array(
+            [[np.nan, 0.0, 0.0], [np.inf, 0.0, 0.0]],
+            dtype=float,
+        )
+        env.mj_model.collapse_check = lambda: np.nan
+        env.mj_model.get_slip_penalty = lambda height: pytest.fail(
+            "terminal velocity shaping should not compute slip"
+        )
+
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        reward, info, terminated = env._compute_reward(action, np.zeros(3, dtype=float))
+
+        assert terminated
+        assert info["terminated_by_collapse"]
+        assert np.isnan(info["critical_eig_raw"])
+        assert info["critical_eig"] == pytest.approx(0.0)
+        assert info["forward_velocity"] == pytest.approx(0.0)
+        assert info["forward"] == pytest.approx(0.0)
+        assert info["rigidity"] == pytest.approx(0.0)
+        assert info["slip"] == pytest.approx(0.0)
+        assert info["collapse_penalty"] == pytest.approx(-1.5)
+        assert np.isfinite(reward)
+        assert reward == pytest.approx(-1.5)
+    finally:
+        env.close()
+
+
+def test_nonfinite_nonterminal_velocity_and_slip_are_sanitized_for_reward() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=False),
+            forward_weight=3.0,
+            energy_weight=0.0,
+            alive_bonus=0.0,
+            rigidity_weight=0.0,
+            slip_weight=0.5,
+            critical_eig_threshold=0.03,
+            max_forward_velocity=None,
+        )
+    )
+    try:
+        env.mj_model.get_node_position_matrix = lambda: np.array(
+            [[np.nan, 0.0, 0.0], [np.nan, 0.0, 0.0]],
+            dtype=float,
+        )
+        env.mj_model.collapse_check = lambda: 1.0
+        env.mj_model.get_slip_penalty = lambda height: np.inf
+
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        reward, info, terminated = env._compute_reward(action, np.zeros(3, dtype=float))
+
+        assert not terminated
+        assert np.isnan(info["forward_velocity_raw"])
+        assert info["forward_velocity"] == pytest.approx(0.0)
+        assert info["forward"] == pytest.approx(0.0)
+        assert info["slip"] == pytest.approx(0.0)
+        assert np.isfinite(reward)
+        assert reward == pytest.approx(0.0)
+    finally:
+        env.close()
+
+
+def test_nonterminal_forward_reward_uses_clipped_com_displacement_velocity() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=False),
+            forward_weight=4.0,
+            energy_weight=0.0,
+            alive_bonus=0.0,
+            rigidity_weight=0.0,
+            slip_weight=0.0,
+            critical_eig_threshold=0.03,
+            max_forward_velocity=0.25,
+        )
+    )
+    try:
+        env.mj_model.get_node_position_matrix = lambda: np.array(
+            [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            dtype=float,
+        )
+        env.mj_model.collapse_check = lambda: 1.0
+        env.mj_model.get_slip_penalty = lambda height: 0.0
+
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        reward, info, terminated = env._compute_reward(action, np.zeros(3, dtype=float))
+
+        expected_forward = (
+            env.config.forward_weight
+            * env.config.max_forward_velocity
+            / env.mj_model.initial_bounding_box_diagonal
+        )
+        assert not terminated
+        assert info["forward_velocity_raw"] > env.config.max_forward_velocity
+        assert info["forward_velocity"] == pytest.approx(env.config.max_forward_velocity)
+        assert info["com_delta_x"] == pytest.approx(1.0)
+        assert info["forward"] == pytest.approx(expected_forward)
+        assert reward == pytest.approx(expected_forward)
+    finally:
+        env.close()
+
+
+def test_max_forward_velocity_none_disables_com_velocity_clipping() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=False),
+            forward_weight=1.0,
+            energy_weight=0.0,
+            alive_bonus=0.0,
+            rigidity_weight=0.0,
+            slip_weight=0.0,
+            critical_eig_threshold=0.03,
+            max_forward_velocity=None,
+        )
+    )
+    try:
+        env.mj_model.get_node_position_matrix = lambda: np.array(
+            [[0.5, 0.0, 0.0], [0.5, 0.0, 0.0]],
+            dtype=float,
+        )
+        env.mj_model.collapse_check = lambda: 1.0
+        env.mj_model.get_slip_penalty = lambda height: 0.0
+
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        _, info, terminated = env._compute_reward(action, np.zeros(3, dtype=float))
+
+        assert not terminated
+        assert info["forward_velocity_raw"] > 1.0
+        assert info["forward_velocity"] == pytest.approx(info["forward_velocity_raw"])
     finally:
         env.close()
 

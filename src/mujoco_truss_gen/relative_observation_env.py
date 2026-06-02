@@ -73,7 +73,8 @@ class MujocoRelativeObsEnv(MujocoTrussEnv):
         ctrl_high = ctrlrange[:, 1]
         ctrl = np.clip(ctrl, ctrl_low, ctrl_high)
 
+        previous_com = self._center_of_mass()
         self._advance(ctrl)
-        reward, info, terminated = self._compute_reward(action)
+        reward, info, terminated = self._compute_reward(action, previous_com)
         truncated = self.steps >= self.max_steps
         return self._get_obs(), reward, terminated, truncated, info
