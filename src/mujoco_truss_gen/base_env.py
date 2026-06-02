@@ -360,7 +360,11 @@ class MujocoTrussEnv(gym.Env):
         energy_penalty = float(np.sum(np.square(action)))
         slip_penalty = float(self.mj_model.get_slip_penalty(height=self.config.slip_height))
 
-        forward_reward = self.config.forward_weight * forward_vel
+        forward_reward = (
+            self.config.forward_weight
+            * forward_vel
+            / self.mj_model.initial_bounding_box_diagonal
+        )
         energy_reward = -self.config.energy_weight * energy_penalty
         rigidity_reward = self.config.rigidity_weight * critical_eig
         slip_reward = -self.config.slip_weight * slip_penalty

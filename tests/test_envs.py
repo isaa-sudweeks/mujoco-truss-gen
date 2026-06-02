@@ -91,6 +91,62 @@ def test_scaled_named_preset_compiles() -> None:
     get_mujoco_spec("octahedron", scale=2.0, realistic=True).compile()
 
 
+def test_model_records_initial_bounding_box_diagonal() -> None:
+    base_model = MujocoModel(get_mujoco_spec("octahedron", scale=1.0, realistic=False))
+    scaled_model = MujocoModel(get_mujoco_spec("octahedron", scale=2.5, realistic=False))
+
+    assert base_model.initial_bounding_box_diagonal > 0.0
+    np.testing.assert_allclose(
+        scaled_model.initial_bounding_box_diagonal,
+        2.5 * base_model.initial_bounding_box_diagonal,
+    )
+
+
+def test_forward_reward_is_scaled_by_initial_bounding_box_diagonal() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", scale=2.0, realistic=False),
+            forward_weight=3.0,
+            energy_weight=0.0,
+            alive_bonus=0.0,
+            rigidity_weight=0.0,
+            slip_weight=0.0,
+            critical_eig_threshold=0.0,
+        )
+    )
+    try:
+        env.mj_model.get_forward_velocity = lambda: 6.0
+        env.mj_model.collapse_check = lambda: 1.0
+        env.mj_model.get_slip_penalty = lambda height: 0.0
+
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        reward, info, terminated = env._compute_reward(action)
+
+        expected_forward = 3.0 * 6.0 / env.mj_model.initial_bounding_box_diagonal
+        np.testing.assert_allclose(info["forward"], expected_forward)
+        np.testing.assert_allclose(reward, expected_forward)
+        assert not terminated
+    finally:
+        env.close()
+
+
+def test_reset_reinitializes_scaled_tendon_actuator_lengths() -> None:
+    for realistic in (False, True):
+        model = MujocoModel(get_mujoco_spec("octahedron", scale=2.5, realistic=realistic))
+        model.reset(np.random.default_rng(7))
+
+        for actuator_id in model.external_actuator_ids:
+            if model.model.actuator_trntype[actuator_id] != mujoco.mjtTrn.mjTRN_TENDON:
+                continue
+            if model.model.actuator_dyntype[actuator_id] != mujoco.mjtDyn.mjDYN_INTEGRATOR:
+                continue
+
+            act_adr = model.model.actuator_actadr[actuator_id]
+            tendon_id = model.model.actuator_trnid[actuator_id, 0]
+            assert act_adr >= 0
+            assert model.data.act[act_adr] == pytest.approx(model.data.ten_length[tendon_id])
+
+
 def test_scaled_abstract_preset_keeps_control_values_unscaled() -> None:
     root = ET.fromstring(get_mujoco_spec("octahedron", scale=2.5, realistic=False).to_xml())
 

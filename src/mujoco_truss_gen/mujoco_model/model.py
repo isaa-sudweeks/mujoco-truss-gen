@@ -86,6 +86,7 @@ class MujocoModel:
         mujoco.mj_forward(self.model, self.data)
         initialize_actuator_lengths(self.model, self.data)
         self.init_act = self.data.act.copy()
+        self.initial_bounding_box_diagonal = self._node_bounding_box_diagonal()
         self.wcrm = False
         self.initial_critical_eig = max(self._critical_eig(), 1e-8)
 
@@ -259,6 +260,7 @@ class MujocoModel:
             self.data.act[:] = self.init_act.copy()
         mujoco.mj_forward(self.model, self.data)
         self.apply_angle_bisector_control()
+        initialize_actuator_lengths(self.model, self.data)
         mujoco.mj_forward(self.model, self.data)
 
     def apply_angle_bisector_control(self) -> None:
@@ -312,6 +314,15 @@ class MujocoModel:
         return np.array(
             [self.data.cvel[self.node_body_ids[node_name]][3:] for node_name in self.node_names]
         )
+
+    def _node_bounding_box_diagonal(self) -> float:
+        positions = self.get_node_position_matrix()
+        if positions.size == 0:
+            return 1.0
+
+        spans = np.ptp(positions, axis=0)
+        diagonal = float(np.linalg.norm(spans))
+        return diagonal if diagonal > 1e-8 else 1.0
 
     def _logical_node_name(self, node_name: str) -> str:
         return node_name.split("_tri_", 1)[0].split("_route_", 1)[0]
