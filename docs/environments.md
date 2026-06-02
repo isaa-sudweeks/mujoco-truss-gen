@@ -177,12 +177,22 @@ obs, reward, terminated, truncated, info = env.step(action)
 
 ## Rewards
 
-The default reward combines forward velocity, alive bonus, energy penalty,
-rigidity reward, and slip penalty. The forward reward is normalized by the
-diagonal length of the robot's initial node-position bounding box, making the
-term more comparable across differently sized topologies. These defaults are
-provided for experimentation, not as a canonical objective for every
-isoperimetric robot task.
+The default reward combines center-of-mass forward velocity, alive bonus,
+energy penalty, rigidity reward, and slip penalty. The forward reward is
+normalized by the diagonal length of the robot's initial node-position bounding
+box, making the term more comparable across differently sized topologies.
+Forward velocity is clipped by `max_forward_velocity` unless set to `None`.
+
+When the truss crosses the collapse threshold, the default reward policy avoids
+paying positive forward progress or alive bonus from the unstable terminal
+state, zeroes terminal rigidity reward, and skips velocity-derived shaping such
+as slip. Non-finite rigidity metrics are treated as collapse-terminal states.
+`collapse_penalty` is interpreted as a penalty magnitude, so positive and
+negative configured values both contribute a non-positive terminal reward. The
+raw COM velocity, clipped reward velocity, COM displacement, raw and reward-safe
+rigidity metrics, collapse flag, and reward components remain available in
+`info`. These defaults are provided for experimentation, not as a canonical
+objective for every isoperimetric robot task.
 
 Custom tasks should subclass an environment and override `_get_obs()`,
 `_compute_reward()`, `reset()`, or `step()` as needed.
