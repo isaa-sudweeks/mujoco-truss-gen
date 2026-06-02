@@ -96,10 +96,109 @@ def test_model_records_initial_bounding_box_diagonal() -> None:
     scaled_model = MujocoModel(get_mujoco_spec("octahedron", scale=2.5, realistic=False))
 
     assert base_model.initial_bounding_box_diagonal > 0.0
+    assert base_model.initial_bounding_box_dimensions.shape == (3,)
     np.testing.assert_allclose(
         scaled_model.initial_bounding_box_diagonal,
         2.5 * base_model.initial_bounding_box_diagonal,
     )
+    active_axes = list(base_model.axis_indices)
+    np.testing.assert_allclose(
+        scaled_model.initial_bounding_box_dimensions[active_axes],
+        2.5 * base_model.initial_bounding_box_dimensions[active_axes],
+    )
+
+
+@pytest.mark.parametrize("realistic", [False, True])
+def test_relative_obs_normalizes_by_initial_bounding_box_dimensions(
+    realistic: bool,
+) -> None:
+    raw_env = MujocoRelativeObsEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=realistic),
+            normalize_observations=False,
+        )
+    )
+    normalized_env = MujocoRelativeObsEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=realistic),
+            normalize_observations=True,
+        )
+    )
+    try:
+        raw_obs = raw_env._get_obs()
+        normalized_obs = normalized_env._get_obs()
+
+        axis_divisors = raw_env.mj_model.initial_bounding_box_dimensions[
+            list(raw_env.mj_model.axis_indices)
+        ]
+        divisors = np.tile(axis_divisors, len(raw_env.mj_model.node_names))
+        node_obs_size = divisors.size
+
+        np.testing.assert_allclose(
+            normalized_obs[:node_obs_size],
+            raw_obs[:node_obs_size] / divisors,
+            rtol=1e-6,
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            normalized_obs[node_obs_size : 2 * node_obs_size],
+            raw_obs[node_obs_size : 2 * node_obs_size] / divisors,
+            rtol=1e-6,
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            normalized_obs[2 * node_obs_size :],
+            raw_obs[2 * node_obs_size :],
+            rtol=1e-6,
+            atol=1e-6,
+        )
+    finally:
+        raw_env.close()
+        normalized_env.close()
+
+
+@pytest.mark.parametrize("realistic", [False, True])
+def test_base_obs_normalizes_coordinate_channels_by_initial_bounding_box_dimensions(
+    realistic: bool,
+) -> None:
+    raw_env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=realistic),
+            normalize_observations=False,
+        )
+    )
+    normalized_env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=realistic),
+            normalize_observations=True,
+        )
+    )
+    try:
+        raw_obs = raw_env._get_obs()
+        normalized_obs = normalized_env._get_obs()
+
+        coordinate_divisors = raw_env.mj_model.initial_bounding_box_dimensions[[0, 2]]
+        np.testing.assert_allclose(
+            normalized_obs[:-4],
+            raw_obs[:-4],
+            rtol=1e-6,
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            normalized_obs[-4:-2],
+            raw_obs[-4:-2] / coordinate_divisors,
+            rtol=1e-6,
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            normalized_obs[-2:],
+            raw_obs[-2:] / coordinate_divisors,
+            rtol=1e-6,
+            atol=1e-6,
+        )
+    finally:
+        raw_env.close()
+        normalized_env.close()
 
 
 def test_forward_reward_is_scaled_by_initial_bounding_box_diagonal() -> None:

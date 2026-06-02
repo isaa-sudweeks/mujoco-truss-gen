@@ -69,6 +69,7 @@ class TrussEnvConfig:
     zero_alive_bonus_on_termination: bool = True
     zero_rigidity_reward_on_termination: bool = True
     zero_velocity_shaping_on_termination: bool = True
+    normalize_observations: bool = False
 
 
 class MujocoTrussEnv(gym.Env):
@@ -254,13 +255,18 @@ class MujocoTrussEnv(gym.Env):
         node_velocities = self.mj_model.get_node_linear_velocity_matrix()
         com = np.mean(node_positions, axis=0) if node_positions.size else np.zeros(3)
         com_vel = np.mean(node_velocities, axis=0) if node_velocities.size else np.zeros(3)
+        axis_divisors = (
+            self.mj_model.initial_bounding_box_dimensions
+            if self.config.normalize_observations
+            else np.ones(3, dtype=float)
+        )
 
         return np.concatenate(
             [
                 self.mj_model.data.ten_length,
                 self.mj_model.data.ten_velocity,
-                [com[0], com[2]],
-                [com_vel[0], com_vel[2]],
+                [com[0] / axis_divisors[0], com[2] / axis_divisors[2]],
+                [com_vel[0] / axis_divisors[0], com_vel[2] / axis_divisors[2]],
             ]
         ).astype(np.float32)
 

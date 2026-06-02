@@ -86,6 +86,7 @@ class MujocoModel:
         mujoco.mj_forward(self.model, self.data)
         initialize_actuator_lengths(self.model, self.data)
         self.init_act = self.data.act.copy()
+        self.initial_bounding_box_dimensions = self._node_bounding_box_dimensions()
         self.initial_bounding_box_diagonal = self._node_bounding_box_diagonal()
         self.wcrm = False
         self.initial_critical_eig = max(self._critical_eig(), 1e-8)
@@ -314,6 +315,14 @@ class MujocoModel:
         return np.array(
             [self.data.cvel[self.node_body_ids[node_name]][3:] for node_name in self.node_names]
         )
+
+    def _node_bounding_box_dimensions(self) -> np.ndarray:
+        positions = self.get_node_position_matrix()
+        if positions.size == 0:
+            return np.ones(3, dtype=float)
+
+        spans = np.ptp(positions, axis=0).astype(float)
+        return np.where(spans > 1e-8, spans, 1.0)
 
     def _node_bounding_box_diagonal(self) -> float:
         positions = self.get_node_position_matrix()

@@ -46,9 +46,16 @@ config = TrussEnvConfig(
     control_noise_std=0.0,
     control_noise_relative=True,
     runtime_apply_control_noise=False,
+    normalize_observations=False,
     domain_randomization=None,
 )
 ```
+
+Set `normalize_observations=True` to divide observed coordinate components by
+the matching dimension of the robot's initial node-position bounding box. For
+example, observed x positions are divided by the initial x span. In the
+relative-observation envs, node velocity components are normalized the same
+way. Zero-width axes use a divisor of `1.0`.
 
 ## Domain Randomization
 

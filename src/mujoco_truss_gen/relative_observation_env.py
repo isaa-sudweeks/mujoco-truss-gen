@@ -43,6 +43,8 @@ class MujocoRelativeObsEnv(MujocoTrussEnv):
 
         relative_positions = []
         absolute_velocities = []
+        normalize_observations = bool(self.config.normalize_observations)
+        bbox_dimensions = self.mj_model.initial_bounding_box_dimensions
 
         for node_name in self.mj_model.node_names:
             pos = node_positions[node_name]
@@ -50,11 +52,12 @@ class MujocoRelativeObsEnv(MujocoTrussEnv):
 
             for axis in active_axes:
                 axis_idx = "xyz".index(axis)
+                divisor = bbox_dimensions[axis_idx] if normalize_observations else 1.0
                 if axis == "z":
-                    relative_positions.append(pos[axis_idx])
+                    relative_positions.append(pos[axis_idx] / divisor)
                 else:
-                    relative_positions.append(pos[axis_idx] - com[axis_idx])
-                absolute_velocities.append(vel[axis_idx])
+                    relative_positions.append((pos[axis_idx] - com[axis_idx]) / divisor)
+                absolute_velocities.append(vel[axis_idx] / divisor)
 
         return np.concatenate(
             [
