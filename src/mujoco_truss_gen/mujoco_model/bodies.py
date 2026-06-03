@@ -21,6 +21,7 @@ from mujoco_truss_gen.mujoco_model.constants import (
 from mujoco_truss_gen.mujoco_model.controllers import (
     angle_bisector_actuator_name,
     angular_bisector_actuator_name,
+    roll_bisector_actuator_name,
 )
 from mujoco_truss_gen.mujoco_model.geometry import triangle_frame
 from mujoco_truss_gen.mujoco_model.model_types import NodeDict, TriangleDict, Vector
@@ -149,7 +150,7 @@ def add_routed_node_body(
     )
     angular_axis = (
         _angular_hinge_axis(hinge_axis, connector_direction)
-        if passive and connector_direction is not None
+        if connector_direction is not None
         else None
     )
     if angular_axis is not None:
@@ -157,6 +158,20 @@ def add_routed_node_body(
             type=mujoco.mjtJoint.mjJNT_HINGE,
             name=f"{node_name}_angular_hinge",
             axis=angular_axis.tolist(),
+            pos=[0.0, 0.0, 0.0],
+            damping=hinge_damping,
+        )
+
+    roll_axis = (
+        _unit_vector(np.array(connector_direction, dtype=float))
+        if not passive and connector_direction is not None
+        else None
+    )
+    if roll_axis is not None:
+        node_body.add_joint(
+            type=mujoco.mjtJoint.mjJNT_HINGE,
+            name=f"{node_name}_roll_hinge",
+            axis=roll_axis.tolist(),
             pos=[0.0, 0.0, 0.0],
             damping=hinge_damping,
         )
@@ -497,6 +512,7 @@ def connect_routed_node_to_ball(
     node_dict: NodeDict,
     physical_params: TrussPhysicalParameters | None = None,
     control_angular_hinge: bool = False,
+    control_roll_hinge: bool = False,
 ) -> None:
     params = physical_params or TrussPhysicalParameters()
     ball_position = np.array(ball.pos, dtype=float)
@@ -537,6 +553,18 @@ def connect_routed_node_to_ball(
             forcerange=params.hinge_force_range,
         )
         angular_actuator.set_to_position(kp=params.hinge_position_kp)
+
+    if control_roll_hinge:
+        roll_actuator = spec.add_actuator(
+            name=roll_bisector_actuator_name(instance_name),
+            trntype=mujoco.mjtTrn.mjTRN_JOINT,
+            target=f"{instance_name}_roll_hinge",
+            ctrllimited=True,
+            ctrlrange=params.hinge_ctrl_range,
+            forcelimited=True,
+            forcerange=params.hinge_force_range,
+        )
+        roll_actuator.set_to_position(kp=params.hinge_position_kp)
 
     constraint = spec.add_equality(
         name=f"connect_{instance_name}",

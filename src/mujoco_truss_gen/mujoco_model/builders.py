@@ -423,7 +423,8 @@ def build_realistic_shapes(
             original_name=original_name,
             node_dict=node_dict,
             physical_params=params,
-            control_angular_hinge=is_passive,
+            control_angular_hinge=True,
+            control_roll_hinge=not is_passive,
         )
 
     edge_tendons: EdgeTendonMap = {}
@@ -781,9 +782,13 @@ def _routed_clone_positions_for_offset(
             ball_position = ball_positions[original_name]
             directions = []
             if index > 0:
-                directions.append(ball_positions[instance_to_original[route[index - 1]]] - ball_position)
+                directions.append(
+                    ball_positions[instance_to_original[route[index - 1]]] - ball_position
+                )
             if index < len(route) - 1:
-                directions.append(ball_positions[instance_to_original[route[index + 1]]] - ball_position)
+                directions.append(
+                    ball_positions[instance_to_original[route[index + 1]]] - ball_position
+                )
 
             valid_directions = [
                 direction / norm
