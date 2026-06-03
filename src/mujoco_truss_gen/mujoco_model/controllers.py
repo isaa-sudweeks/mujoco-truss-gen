@@ -9,19 +9,26 @@ import mujoco
 import numpy as np
 
 ANGLE_BISECTOR_ACTUATOR_PREFIX = "bisector_act_"
+ANGULAR_BISECTOR_ACTUATOR_PREFIX = "bisector_angular_act_"
+ROLL_BISECTOR_ACTUATOR_PREFIX = "bisector_roll_act_"
 
 
 @dataclass(frozen=True, slots=True)
 class AngleBisectorTarget:
     node_name: str
     neighbor_names: tuple[str, ...]
+    neighbor_candidate_site_ids: tuple[int, ...]
     actuator_id: int
+    angular_actuator_id: int | None
+    roll_actuator_id: int | None
     node_body_id: int
     parent_body_id: int
     node_site_id: int
     neighbor_site_ids: tuple[int, ...]
     initial_rod_vector: np.ndarray
     hinge_axis: np.ndarray
+    angular_hinge_axis: np.ndarray | None
+    roll_hinge_axis: np.ndarray | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,10 +52,20 @@ class AngleBisectorController:
     def update(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         for target in self.targets:
             node_pos = data.site_xpos[target.node_site_id]
-            neighbor_positions = [
-                data.site_xpos[site_id] for site_id in target.neighbor_site_ids
-            ]
+            neighbor_site_ids = target.neighbor_site_ids
+            if (
+                len(target.neighbor_site_ids) == 2
+                and len(target.neighbor_candidate_site_ids) >= 2
+            ):
+                neighbor_site_ids = _nearest_site_ids(
+                    node_pos,
+                    data,
+                    target.neighbor_candidate_site_ids,
+                    count=2,
+                )
+            neighbor_positions = [data.site_xpos[site_id] for site_id in neighbor_site_ids]
 
+            plane_normal_world = None
             if len(neighbor_positions) == 1:
                 target_world = _unit_vector(node_pos - neighbor_positions[0])
                 if target_world is None:
@@ -63,6 +80,7 @@ class AngleBisectorController:
                 if bisector_world is None:
                     continue
                 target_world = -bisector_world
+                plane_normal_world = _unit_vector(np.cross(dir_a, dir_b))
 
             parent_xmat = data.xmat[target.parent_body_id].reshape(3, 3)
             target_parent = parent_xmat.T @ target_world
@@ -75,6 +93,70 @@ class AngleBisectorController:
                 continue
 
             data.ctrl[target.actuator_id] = angle
+
+            if target.angular_actuator_id is None or target.angular_hinge_axis is None:
+                continue
+
+            yawed_rod = _rotate_about_axis(
+                target.initial_rod_vector,
+                target.hinge_axis,
+                angle,
+            )
+            yawed_angular_axis = _rotate_about_axis(
+                target.angular_hinge_axis,
+                target.hinge_axis,
+                angle,
+            )
+            angular_angle = _signed_angle_about_axis(
+                yawed_rod,
+                target_parent,
+                yawed_angular_axis,
+            )
+            if angular_angle is None:
+                continue
+
+            data.ctrl[target.angular_actuator_id] = angular_angle
+
+            if (
+                target.roll_actuator_id is None
+                or target.roll_hinge_axis is None
+                or plane_normal_world is None
+            ):
+                continue
+
+            target_normal_parent = parent_xmat.T @ plane_normal_world
+            rolled_axis = _rotate_about_axis(
+                target.roll_hinge_axis,
+                target.hinge_axis,
+                angle,
+            )
+            rolled_axis = _rotate_about_axis(
+                rolled_axis,
+                yawed_angular_axis,
+                angular_angle,
+            )
+            rolled_normal = _rotate_about_axis(
+                target.hinge_axis,
+                target.hinge_axis,
+                angle,
+            )
+            rolled_normal = _rotate_about_axis(
+                rolled_normal,
+                yawed_angular_axis,
+                angular_angle,
+            )
+            if float(np.dot(rolled_normal, target_normal_parent)) < 0.0:
+                target_normal_parent = -target_normal_parent
+
+            roll_angle = _signed_angle_about_axis(
+                rolled_normal,
+                target_normal_parent,
+                rolled_axis,
+            )
+            if roll_angle is None:
+                continue
+
+            data.ctrl[target.roll_actuator_id] = roll_angle
 
     @classmethod
     def _targets_from_xml(
@@ -139,17 +221,23 @@ class AngleBisectorController:
                     AngleBisectorTarget(
                         node_name=node_name,
                         neighbor_names=(neighbor_names[0], neighbor_names[1]),
+                        neighbor_candidate_site_ids=(),
                         actuator_id=actuator_id,
+                        angular_actuator_id=None,
+                        roll_actuator_id=None,
                         node_body_id=node_body_id,
                         parent_body_id=parent_body_id,
                         node_site_id=node_site_id,
                         neighbor_site_ids=(neighbor_site_ids[0], neighbor_site_ids[1]),
                         initial_rod_vector=initial_rod_vector,
                         hinge_axis=hinge_axis,
+                        angular_hinge_axis=None,
+                        roll_hinge_axis=None,
                     )
                 )
 
         route_neighbors = _route_target_neighbors_from_xml(root)
+        edge_tendon_neighbors = _edge_tendon_neighbors_from_xml(root)
         for node_name, neighbor_names in route_neighbors.items():
             if len(neighbor_names) not in {1, 2}:
                 continue
@@ -167,11 +255,28 @@ class AngleBisectorController:
                 mujoco.mjtObj.mjOBJ_ACTUATOR,
                 angle_bisector_actuator_name(node_name),
             )
+            angular_actuator_id = mujoco.mj_name2id(
+                model,
+                mujoco.mjtObj.mjOBJ_ACTUATOR,
+                angular_bisector_actuator_name(node_name),
+            )
+            roll_actuator_id = mujoco.mj_name2id(
+                model,
+                mujoco.mjtObj.mjOBJ_ACTUATOR,
+                roll_bisector_actuator_name(node_name),
+            )
             node_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, node_name)
             node_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, node_name)
             neighbor_site_ids = tuple(
                 mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
                 for name in neighbor_names
+            )
+            neighbor_candidate_site_ids = tuple(
+                site_id
+                for name in edge_tendon_neighbors.get(node_name, ())
+                if name != node_name
+                and (site_id := mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name))
+                >= 0
             )
             if (
                 actuator_id < 0
@@ -186,13 +291,26 @@ class AngleBisectorController:
                 AngleBisectorTarget(
                     node_name=node_name,
                     neighbor_names=neighbor_names,
+                    neighbor_candidate_site_ids=neighbor_candidate_site_ids,
                     actuator_id=actuator_id,
+                    angular_actuator_id=angular_actuator_id
+                    if angular_actuator_id >= 0
+                    else None,
+                    roll_actuator_id=roll_actuator_id
+                    if roll_actuator_id >= 0
+                    else None,
                     node_body_id=node_body_id,
                     parent_body_id=parent_body_id,
                     node_site_id=node_site_id,
                     neighbor_site_ids=neighbor_site_ids,
                     initial_rod_vector=initial_rod_vector,
                     hinge_axis=_hinge_axis(node_body, node_name),
+                    angular_hinge_axis=_angular_hinge_axis(node_body, node_name)
+                    if angular_actuator_id >= 0
+                    else None,
+                    roll_hinge_axis=_roll_hinge_axis(node_body, node_name)
+                    if roll_actuator_id >= 0
+                    else None,
                 )
             )
 
@@ -297,6 +415,14 @@ class NodeVelocityController:
 
 def angle_bisector_actuator_name(node_name: str) -> str:
     return f"{ANGLE_BISECTOR_ACTUATOR_PREFIX}{node_name}"
+
+
+def angular_bisector_actuator_name(node_name: str) -> str:
+    return f"{ANGULAR_BISECTOR_ACTUATOR_PREFIX}{node_name}"
+
+
+def roll_bisector_actuator_name(node_name: str) -> str:
+    return f"{ROLL_BISECTOR_ACTUATOR_PREFIX}{node_name}"
 
 
 def _route_node_paths_from_xml(xml: str | None, site_to_node: dict[str, str]) -> list[list[str]]:
@@ -452,6 +578,28 @@ def _hinge_axis(node_body: ET.Element, node_name: str) -> np.ndarray:
     return unit
 
 
+def _angular_hinge_axis(node_body: ET.Element, node_name: str) -> np.ndarray | None:
+    joint = node_body.find(f"./joint[@name='{node_name}_angular_hinge']")
+    if joint is None:
+        return None
+
+    axis = np.fromstring(joint.get("axis", ""), sep=" ", dtype=float)
+    if axis.size != 3:
+        return None
+    return _unit_vector(axis)
+
+
+def _roll_hinge_axis(node_body: ET.Element, node_name: str) -> np.ndarray | None:
+    joint = node_body.find(f"./joint[@name='{node_name}_roll_hinge']")
+    if joint is None:
+        return None
+
+    axis = np.fromstring(joint.get("axis", ""), sep=" ", dtype=float)
+    if axis.size != 3:
+        return None
+    return _unit_vector(axis)
+
+
 def _route_target_neighbors_from_xml(root: ET.Element) -> dict[str, tuple[str, ...]]:
     tendon_root = root.find("tendon")
     if tendon_root is None:
@@ -482,6 +630,49 @@ def _route_target_neighbors_from_xml(root: ET.Element) -> dict[str, tuple[str, .
     return {node_name: tuple(node_neighbors) for node_name, node_neighbors in neighbors.items()}
 
 
+def _edge_tendon_neighbors_from_xml(root: ET.Element) -> dict[str, tuple[str, ...]]:
+    tendon_root = root.find("tendon")
+    if tendon_root is None:
+        return {}
+
+    neighbors: dict[str, list[str]] = {}
+    for spatial in tendon_root.findall("spatial"):
+        if not spatial.get("name", "").startswith("tendon_"):
+            continue
+        sites = [
+            site_ref.get("site")
+            for site_ref in spatial.findall("site")
+            if site_ref.get("site")
+        ]
+        if len(sites) != 2 or sites[0] == sites[1]:
+            continue
+        site_a, site_b = sites
+        neighbors.setdefault(site_a, [])
+        neighbors.setdefault(site_b, [])
+        if site_b not in neighbors[site_a]:
+            neighbors[site_a].append(site_b)
+        if site_a not in neighbors[site_b]:
+            neighbors[site_b].append(site_a)
+    return {node_name: tuple(node_neighbors) for node_name, node_neighbors in neighbors.items()}
+
+
+def _nearest_site_ids(
+    node_pos: np.ndarray,
+    data: mujoco.MjData,
+    site_ids: tuple[int, ...],
+    *,
+    count: int,
+) -> tuple[int, ...]:
+    distances = sorted(
+        (
+            (float(np.linalg.norm(data.site_xpos[site_id] - node_pos)), site_id)
+            for site_id in site_ids
+        ),
+        key=lambda item: item[0],
+    )
+    return tuple(site_id for _, site_id in distances[:count])
+
+
 def _unit_vector(vector: np.ndarray) -> np.ndarray | None:
     norm = float(np.linalg.norm(vector))
     if norm < 1e-10:
@@ -509,3 +700,14 @@ def _signed_angle_about_axis(
     signed_cross = float(np.dot(axis_unit, cross))
     dot = float(np.clip(np.dot(from_unit, to_unit), -1.0, 1.0))
     return math.atan2(signed_cross, dot)
+
+
+def _rotate_about_axis(vector: np.ndarray, axis: np.ndarray, angle: float) -> np.ndarray:
+    axis_unit = _unit_vector(axis)
+    if axis_unit is None:
+        return vector
+    return (
+        vector * math.cos(angle)
+        + np.cross(axis_unit, vector) * math.sin(angle)
+        + axis_unit * float(np.dot(axis_unit, vector)) * (1.0 - math.cos(angle))
+    )

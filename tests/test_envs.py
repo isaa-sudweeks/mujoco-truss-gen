@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import xml.etree.ElementTree as ET
 from copy import deepcopy
 
@@ -29,6 +30,7 @@ from mujoco_truss_gen import (
 )
 from mujoco_truss_gen.mujoco_model.constants import (
     ACTIVE_NODE_MASS,
+    ACTUATOR_CTRL_RANGE,
     EDGE_TENDON_WIDTH,
     HINGE_DAMPING,
     NODE_RADIUS,
@@ -442,7 +444,10 @@ def test_scaled_abstract_preset_keeps_control_values_unscaled() -> None:
 
     actuator = root.find(".//actuator/general[@name='act_12']")
     assert actuator is not None
-    np.testing.assert_allclose(_xml_vector(actuator.get("ctrlrange", "")), [-0.05, 0.05])
+    np.testing.assert_allclose(
+        _xml_vector(actuator.get("ctrlrange", "")),
+        ACTUATOR_CTRL_RANGE,
+    )
     np.testing.assert_allclose(_xml_vector(actuator.get("actrange", "")), [0.0, 3.0])
 
 
@@ -1172,6 +1177,8 @@ def test_realistic_routed_passive_cylinders_face_connector_rods() -> None:
         hinge_joint = node_body.find(f"./joint[@name='{node_name}_z_hinge']")
         assert hinge_joint is not None
         assert float(hinge_joint.get("damping", "nan")) == pytest.approx(HINGE_DAMPING)
+        angular_hinge = node_body.find(f"./joint[@name='{node_name}_angular_hinge']")
+        roll_hinge = node_body.find(f"./joint[@name='{node_name}_roll_hinge']")
 
         rod_body = node_body.find(f"./body[@name='rod_{node_name}']")
         assert rod_body is not None
@@ -1196,6 +1203,34 @@ def test_realistic_routed_passive_cylinders_face_connector_rods() -> None:
             1.0,
             abs=1e-5,
         )
+        angular_actuator = root.find(
+            f"./actuator/general[@name='bisector_angular_act_{node_name}']"
+        )
+        roll_actuator = root.find(
+            f"./actuator/general[@name='bisector_roll_act_{node_name}']"
+        )
+        if node_name in passive_nodes:
+            assert angular_hinge is not None
+            assert float(angular_hinge.get("damping", "nan")) == pytest.approx(
+                HINGE_DAMPING
+            )
+            assert angular_actuator is not None
+            assert angular_actuator.get("joint") == f"{node_name}_angular_hinge"
+            assert roll_hinge is None
+            assert roll_actuator is None
+        else:
+            assert angular_hinge is not None
+            assert float(angular_hinge.get("damping", "nan")) == pytest.approx(
+                HINGE_DAMPING
+            )
+            assert angular_actuator is not None
+            assert angular_actuator.get("joint") == f"{node_name}_angular_hinge"
+            assert roll_hinge is not None
+            assert float(roll_hinge.get("damping", "nan")) == pytest.approx(
+                HINGE_DAMPING
+            )
+            assert roll_actuator is not None
+            assert roll_actuator.get("joint") == f"{node_name}_roll_hinge"
 
 
 def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
@@ -1207,8 +1242,18 @@ def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
 
     for target in model.angle_bisector_controller.targets:
         node_pos = model.data.site_xpos[target.node_site_id]
+        neighbor_site_ids = target.neighbor_site_ids
+        if len(neighbor_site_ids) == 2 and len(target.neighbor_candidate_site_ids) >= 2:
+            neighbor_site_ids = tuple(
+                sorted(
+                    target.neighbor_candidate_site_ids,
+                    key=lambda site_id: float(
+                        np.linalg.norm(model.data.site_xpos[site_id] - node_pos)
+                    ),
+                )[:2]
+            )
         neighbor_positions = [
-            model.data.site_xpos[site_id] for site_id in target.neighbor_site_ids
+            model.data.site_xpos[site_id] for site_id in neighbor_site_ids
         ]
         if len(neighbor_positions) == 1:
             target_direction = _unit(node_pos - neighbor_positions[0])
@@ -1218,25 +1263,221 @@ def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
                 _unit(neighbor_positions[0] - node_pos)
                 + _unit(neighbor_positions[1] - node_pos)
             )
-            target_direction = bisector
-            expected_dot = -1.0
-        planar_target = target_direction - target.hinge_axis * float(
-            np.dot(target_direction, target.hinge_axis)
-        )
-        planar_target = _unit(planar_target)
-
+            target_direction = -bisector
+            expected_dot = 1.0
         tip_site_id = mujoco.mj_name2id(
             model.model,
             mujoco.mjtObj.mjOBJ_SITE,
             f"tip_site_{target.node_name}",
         )
-        rod_direction = _unit(model.data.site_xpos[tip_site_id] - node_pos)
 
-        assert float(np.dot(rod_direction, planar_target)) == pytest.approx(
-            expected_dot,
-            abs=1e-4,
+        if target.angular_actuator_id is not None:
+            parent_xmat = model.data.xmat[target.parent_body_id].reshape(3, 3)
+            angle = float(model.data.ctrl[target.actuator_id])
+            angular_angle = float(model.data.ctrl[target.angular_actuator_id])
+            yawed_rod = _rotate_about_axis(
+                target.initial_rod_vector,
+                target.hinge_axis,
+                angle,
+            )
+            yawed_angular_axis = _rotate_about_axis(
+                target.angular_hinge_axis,
+                target.hinge_axis,
+                angle,
+            )
+            rod_direction = _unit(
+                parent_xmat
+                @ _rotate_about_axis(yawed_rod, yawed_angular_axis, angular_angle)
+            )
+            assert float(np.dot(rod_direction, target_direction)) == pytest.approx(
+                1.0,
+                abs=1e-4,
+            )
+        else:
+            rod_direction = _unit(model.data.site_xpos[tip_site_id] - node_pos)
+            planar_target = target_direction - target.hinge_axis * float(
+                np.dot(target_direction, target.hinge_axis)
+            )
+            planar_target = _unit(planar_target)
+            assert float(np.dot(rod_direction, planar_target)) == pytest.approx(
+                expected_dot,
+                abs=1e-4,
+            )
+            assert abs(float(np.dot(rod_direction, target.hinge_axis))) < 1e-6
+
+
+def test_realistic_routed_plane_candidates_use_edge_tendon_duplicate_neighbors() -> None:
+    node_dict, shape_dict = get_preset_definition("tetrahedron")
+    spec = get_mujoco_spec(node_dict, shape_dict, realistic=True)
+    root = ET.fromstring(spec.to_xml())
+    model = MujocoModel(spec)
+    edge_neighbors = _edge_tendon_neighbors(root)
+
+    checked_duplicate_neighbors = False
+    for target in model.angle_bisector_controller.targets:
+        if len(target.neighbor_candidate_site_ids) < 2:
+            continue
+
+        candidate_names = tuple(
+            model.model.site(site_id).name for site_id in target.neighbor_candidate_site_ids
         )
-        assert abs(float(np.dot(rod_direction, target.hinge_axis))) < 1e-6
+        assert candidate_names == edge_neighbors[target.node_name]
+        checked_duplicate_neighbors = checked_duplicate_neighbors or any(
+            "_route_" in name for name in candidate_names
+        )
+
+    assert checked_duplicate_neighbors
+
+
+def test_realistic_routed_active_rods_follow_live_nearest_neighbor_plane() -> None:
+    node_dict, shape_dict = get_preset_definition("tetrahedron")
+    spec = get_mujoco_spec(node_dict, shape_dict, realistic=True)
+    model = MujocoModel(spec)
+    controller = model.angle_bisector_controller
+    target = next(
+        target
+        for target in controller.targets
+        if target.angular_actuator_id is not None
+        and len(target.neighbor_site_ids) == 2
+        and len(target.neighbor_candidate_site_ids) >= 2
+    )
+
+    moved_site_id = target.neighbor_candidate_site_ids[0]
+    moved_node_name = model.model.site(moved_site_id).name
+    slide_joint_id = mujoco.mj_name2id(
+        model.model,
+        mujoco.mjtObj.mjOBJ_JOINT,
+        f"{moved_node_name}_z",
+    )
+    assert slide_joint_id >= 0
+
+    model.data.qpos[int(model.model.jnt_qposadr[slide_joint_id])] += 0.35
+    mujoco.mj_forward(model.model, model.data)
+    controller.update(model.model, model.data)
+
+    node_pos = model.data.site_xpos[target.node_site_id]
+    nearest_site_ids = sorted(
+        target.neighbor_candidate_site_ids,
+        key=lambda site_id: float(np.linalg.norm(model.data.site_xpos[site_id] - node_pos)),
+    )[:2]
+    neighbor_a = model.data.site_xpos[nearest_site_ids[0]]
+    neighbor_b = model.data.site_xpos[nearest_site_ids[1]]
+    plane_normal = _unit(np.cross(neighbor_a - node_pos, neighbor_b - node_pos))
+
+    parent_xmat = model.data.xmat[target.parent_body_id].reshape(3, 3)
+    angle = float(model.data.ctrl[target.actuator_id])
+    angular_angle = float(model.data.ctrl[target.angular_actuator_id])
+    yawed_rod = _rotate_about_axis(target.initial_rod_vector, target.hinge_axis, angle)
+    yawed_angular_axis = _rotate_about_axis(
+        target.angular_hinge_axis,
+        target.hinge_axis,
+        angle,
+    )
+    rod_direction = _unit(
+        parent_xmat @ _rotate_about_axis(yawed_rod, yawed_angular_axis, angular_angle)
+    )
+
+    assert abs(float(np.dot(rod_direction, plane_normal))) < 1e-6
+
+
+def test_realistic_routed_roll_hinges_are_active_node_controlled_only() -> None:
+    root = ET.fromstring(get_mujoco_spec("tetrahedron", realistic=True).to_xml())
+    passive_nodes = set()
+    for spatial in root.findall("./tendon/spatial"):
+        if not spatial.get("name", "").startswith("route_"):
+            continue
+        sites = spatial.findall("site")
+        passive_nodes.update((sites[0].get("site"), sites[-1].get("site")))
+
+    for node_body in root.findall("./worldbody/body"):
+        node_name = node_body.get("name")
+        if not node_name or not node_name.startswith("node_"):
+            continue
+        if node_body.find(f"./body[@name='rod_{node_name}']") is None:
+            continue
+
+        roll_hinge = node_body.find(f"./joint[@name='{node_name}_roll_hinge']")
+        roll_actuator = root.find(
+            f"./actuator/general[@name='bisector_roll_act_{node_name}']"
+        )
+        if node_name in passive_nodes:
+            assert roll_hinge is None
+            assert roll_actuator is None
+        else:
+            assert roll_hinge is not None
+            assert roll_actuator is not None
+            assert roll_actuator.get("joint") == f"{node_name}_roll_hinge"
+
+
+def test_realistic_routed_roll_hinge_tracks_live_nearest_neighbor_plane() -> None:
+    node_dict, shape_dict = get_preset_definition("tetrahedron")
+    spec = get_mujoco_spec(node_dict, shape_dict, realistic=True)
+    model = MujocoModel(spec)
+    controller = model.angle_bisector_controller
+    target = next(
+        target
+        for target in controller.targets
+        if target.roll_actuator_id is not None
+        and target.roll_hinge_axis is not None
+        and len(target.neighbor_site_ids) == 2
+        and len(target.neighbor_candidate_site_ids) >= 2
+    )
+
+    moved_site_id = target.neighbor_candidate_site_ids[0]
+    moved_node_name = model.model.site(moved_site_id).name
+    slide_joint_id = mujoco.mj_name2id(
+        model.model,
+        mujoco.mjtObj.mjOBJ_JOINT,
+        f"{moved_node_name}_z",
+    )
+    assert slide_joint_id >= 0
+
+    model.data.qpos[int(model.model.jnt_qposadr[slide_joint_id])] += 0.35
+    mujoco.mj_forward(model.model, model.data)
+    controller.update(model.model, model.data)
+
+    node_pos = model.data.site_xpos[target.node_site_id]
+    nearest_site_ids = sorted(
+        target.neighbor_candidate_site_ids,
+        key=lambda site_id: float(np.linalg.norm(model.data.site_xpos[site_id] - node_pos)),
+    )[:2]
+    neighbor_a = model.data.site_xpos[nearest_site_ids[0]]
+    neighbor_b = model.data.site_xpos[nearest_site_ids[1]]
+    plane_normal = _unit(np.cross(neighbor_a - node_pos, neighbor_b - node_pos))
+
+    parent_xmat = model.data.xmat[target.parent_body_id].reshape(3, 3)
+    target_normal_parent = parent_xmat.T @ plane_normal
+    angle = float(model.data.ctrl[target.actuator_id])
+    angular_angle = float(model.data.ctrl[target.angular_actuator_id])
+    roll_angle = float(model.data.ctrl[target.roll_actuator_id])
+    yawed_angular_axis = _rotate_about_axis(
+        target.angular_hinge_axis,
+        target.hinge_axis,
+        angle,
+    )
+    pitched_roll_axis = _rotate_about_axis(
+        target.roll_hinge_axis,
+        target.hinge_axis,
+        angle,
+    )
+    pitched_roll_axis = _rotate_about_axis(
+        pitched_roll_axis,
+        yawed_angular_axis,
+        angular_angle,
+    )
+    pitched_normal = _rotate_about_axis(
+        target.hinge_axis,
+        yawed_angular_axis,
+        angular_angle,
+    )
+    rolled_normal = _unit(
+        _rotate_about_axis(pitched_normal, pitched_roll_axis, roll_angle)
+    )
+
+    assert abs(float(np.dot(rolled_normal, target_normal_parent))) == pytest.approx(
+        1.0,
+        abs=1e-4,
+    )
 
 
 def test_node_velocity_controller_maps_node_commands_to_edge_commands() -> None:
@@ -1295,7 +1536,7 @@ def test_node_velocity_controller_clips_edge_commands() -> None:
 
     np.testing.assert_allclose(
         controller.clipped_edge_commands(model.model, np.array([0.0, 2.0, 0.0])),
-        [0.05, -0.05],
+        [ACTUATOR_CTRL_RANGE[1], ACTUATOR_CTRL_RANGE[0]],
     )
 
 
@@ -1540,6 +1781,37 @@ def test_actuator_names_are_edge_based() -> None:
 
 def _unit(vector: np.ndarray) -> np.ndarray:
     return vector / np.linalg.norm(vector)
+
+
+def _rotate_about_axis(vector: np.ndarray, axis: np.ndarray, angle: float) -> np.ndarray:
+    axis = _unit(axis)
+    return (
+        vector * math.cos(angle)
+        + np.cross(axis, vector) * math.sin(angle)
+        + axis * float(np.dot(axis, vector)) * (1.0 - math.cos(angle))
+    )
+
+
+def _edge_tendon_neighbors(root: ET.Element) -> dict[str, tuple[str, ...]]:
+    neighbors: dict[str, list[str]] = {}
+    for spatial in root.findall("./tendon/spatial"):
+        if not spatial.get("name", "").startswith("tendon_"):
+            continue
+        sites = [
+            site_ref.get("site")
+            for site_ref in spatial.findall("site")
+            if site_ref.get("site")
+        ]
+        if len(sites) != 2:
+            continue
+        site_a, site_b = sites
+        neighbors.setdefault(site_a, [])
+        neighbors.setdefault(site_b, [])
+        if site_b not in neighbors[site_a]:
+            neighbors[site_a].append(site_b)
+        if site_a not in neighbors[site_b]:
+            neighbors[site_b].append(site_a)
+    return {node_name: tuple(node_neighbors) for node_name, node_neighbors in neighbors.items()}
 
 
 def _xml_vector(value: str) -> np.ndarray:

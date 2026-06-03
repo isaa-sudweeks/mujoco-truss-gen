@@ -55,7 +55,7 @@ PERIMETER_CONSTRAINT_TENDON_WIDTH = 0.0001
 # RGBA color used to hide perimeter-constraint tendons.
 PERIMETER_CONSTRAINT_TENDON_RGBA = [0.0, 0.0, 0.0, 0.0]
 # Velocity-control limits for tendon actuators.
-ACTUATOR_CTRL_RANGE = [-0.05, 0.05]
+ACTUATOR_CTRL_RANGE = [-0.1, 0.1]
 # Default integrator activation range for tendon actuators.
 DEFAULT_ACTUATOR_RANGE = [0.0, 3.0]
 # Proportional gain for abstract tendon actuators.
