@@ -106,6 +106,24 @@ caller.
   dictionaries for the built-in preset.
 - `get_icosahedron_definition(scale=1.0)` returns fresh node and triangle
   dictionaries for the built-in preset.
+- `get_usevitch_graph_definition(graph_label, partition_index=1, scale=1.0)`
+  returns one of the non-octahedron triangle-decomposable graph definitions
+  enumerated in Usevitch et al. (2025), Fig. 3. Named presets use the paper's
+  graph labels, for example `usevitch_1514879` or
+  `usevitch_60243677150_p3` when multiple partitions exist. Triangle
+  partitions are recomputed from the decoded graph with the paper's exhaustive
+  exact-cover criterion: enumerate every graph 3-cycle, then select
+  edge-disjoint triangles that cover every graph edge exactly once. The integer
+  programming formulations described in the paper are not used for these small
+  built-in preset graphs. Node positions are generated with the paper's
+  multidimensional-scaling embedding search: each trial assigns random
+  distances to connected node pairs, assigns distance `10` to disjoint node
+  pairs, and computes a 3D MDS embedding. Each MDS candidate is then rescaled
+  so the mean structural edge length is `1.0`, which keeps model sizes close to
+  the other built-in presets without changing the candidate's shape. The
+  selected embedding is the candidate with the largest worst case rigidity
+  index; when candidates have nearly identical rigidity index values, the
+  tie-breaker is the smaller RMS error from unit structural edge lengths.
 - `get_perimeter(node_dict, triangle_dict)` computes each triangle perimeter
   from the first three vertices.
 - `save_xml(spec, filename)` writes `spec.to_xml()` to disk and returns the
@@ -175,3 +193,9 @@ Realistic triangle models include one accelerometer sensor per generated node
 site by default. Pass `accelerometer_config=AccelerometerConfig(...)` to
 configure sensor fields such as `noise`, `cutoff`, `nsample`, `delay`, or
 `name_prefix`; pass `accelerometer_config=None` to omit them.
+
+## References
+
+- Nathan Usevitch, Isaac Weaver, and James Usevitch. "Triangle-Decomposable
+  Graphs for Isoperimetric Robots." arXiv:2505.01624, 2025.
+  <https://arxiv.org/abs/2505.01624>

@@ -26,9 +26,11 @@ from mujoco_truss_gen.mujoco_model.io_viewer import (
 from mujoco_truss_gen.mujoco_model.model import MujocoModel
 from mujoco_truss_gen.mujoco_model.presets import (
     PRESETS,
+    USEVITCH_GRAPH_LABELS,
     get_icosahedron_definition,
     get_octahedron_definition,
     get_preset_definition,
+    get_usevitch_graph_definition,
 )
 from mujoco_truss_gen.mujoco_model.sensors import (
     DEFAULT_ACCELEROMETER_CONFIG,
@@ -43,6 +45,7 @@ __all__ = [
     "NodeVelocityController",
     "PRESETS",
     "TrussPhysicalParameters",
+    "USEVITCH_GRAPH_LABELS",
     "build_abstract_shapes",
     "build_abstract_triangle",
     "build_realistic_triangle",
@@ -59,6 +62,7 @@ __all__ = [
     "get_octahedron_definition",
     "get_perimeter",
     "get_preset_definition",
+    "get_usevitch_graph_definition",
     "get_route_lengths",
     "save_xml",
     "view",

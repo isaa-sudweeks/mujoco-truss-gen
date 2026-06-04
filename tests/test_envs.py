@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import xml.etree.ElementTree as ET
 from copy import deepcopy
+from itertools import combinations
 
 import mujoco
 import numpy as np
@@ -26,8 +27,10 @@ from mujoco_truss_gen import (
     get_node_features,
     get_preset_definition,
     get_route_lengths,
+    get_usevitch_graph_definition,
     save_xml,
 )
+from mujoco_truss_gen.mujoco_model import presets as preset_module
 from mujoco_truss_gen.mujoco_model.constants import (
     ACTIVE_NODE_MASS,
     ACTUATOR_CTRL_RANGE,
@@ -73,6 +76,92 @@ def test_builtin_presets_compile() -> None:
         get_mujoco_spec(preset_name, realistic=True).compile()
 
     get_mujoco_spec("tetrahedron", realistic=True).compile()
+
+
+def test_usevitch_graph_presets_compile_and_match_partitions() -> None:
+    expected_presets = {
+        "usevitch_1514879",
+        "usevitch_210272254_p1",
+        "usevitch_210272254_p2",
+        "usevitch_212365307",
+        "usevitch_54501547959",
+        "usevitch_64702095263",
+        "usevitch_49530656767",
+        "usevitch_53827448765",
+        "usevitch_54364254015",
+        "usevitch_44565393342",
+        "usevitch_44968308287",
+        "usevitch_44137822173",
+        "usevitch_60202270686_p1",
+        "usevitch_60202270686_p2",
+        "usevitch_60243677150_p1",
+        "usevitch_60243677150_p2",
+        "usevitch_60243677150_p3",
+    }
+
+    assert expected_presets <= set(PRESETS)
+
+    for preset_name in expected_presets:
+        node_dict, triangle_dict = get_preset_definition(preset_name)
+        assert len(triangle_dict) == len(node_dict) - 2
+        edge_keys = {
+            tuple(sorted(edge))
+            for triangle_nodes in triangle_dict.values()
+            for edge in combinations(triangle_nodes[:3], 2)
+        }
+        edge_lengths = []
+        for from_node, to_node in edge_keys:
+            edge_length = np.linalg.norm(
+                np.asarray(node_dict[to_node]) - np.asarray(node_dict[from_node])
+            )
+            edge_lengths.append(edge_length)
+            assert np.isfinite(edge_length)
+            assert edge_length > 1e-8
+        assert np.mean(edge_lengths) == pytest.approx(1.0)
+        for from_node, to_node in combinations(node_dict, 2):
+            node_distance = np.linalg.norm(
+                np.asarray(node_dict[to_node]) - np.asarray(node_dict[from_node])
+            )
+            assert np.isfinite(node_distance)
+            assert node_distance > 1e-8
+        get_mujoco_spec(preset_name, realistic=False).compile()
+
+    nodes, triangles = get_usevitch_graph_definition(60243677150, partition_index=3)
+    assert len(nodes) == 9
+    assert len(triangles) == 7
+
+
+def test_usevitch_embedding_distance_matrix_matches_paper_algorithm() -> None:
+    rng = np.random.default_rng(123)
+    edges = ((0, 1), (2, 3))
+
+    distances = preset_module._random_usevitch_distance_matrix(4, edges, rng)
+
+    np.testing.assert_allclose(distances, distances.T)
+    np.testing.assert_allclose(np.diag(distances), np.zeros(4))
+    assert 0.0 <= distances[0, 1] < 1.0
+    assert 0.0 <= distances[2, 3] < 1.0
+    assert distances[0, 2] == pytest.approx(10.0)
+    assert distances[0, 3] == pytest.approx(10.0)
+    assert distances[1, 2] == pytest.approx(10.0)
+    assert distances[1, 3] == pytest.approx(10.0)
+
+
+def test_usevitch_embedding_candidates_normalize_mean_edge_length() -> None:
+    coordinates = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 4.0, 0.0],
+        ]
+    )
+    edges = ((0, 1), (1, 2))
+
+    normalized = preset_module._normalize_usevitch_candidate_edge_lengths(coordinates, edges)
+    edge_lengths = preset_module._edge_lengths(normalized, edges)
+
+    np.testing.assert_allclose(edge_lengths, [2.0 / 3.0, 4.0 / 3.0])
+    assert np.mean(edge_lengths) == pytest.approx(1.0)
 
 
 def test_builtin_preset_definitions_support_unit_scale() -> None:
@@ -538,9 +627,7 @@ def test_generated_world_uses_professional_scene_defaults() -> None:
     assert skybox is not None
     assert skybox.get("type") == "skybox"
 
-    light_names = {
-        light.get("name") for light in root.findall("./worldbody/light")
-    }
+    light_names = {light.get("name") for light in root.findall("./worldbody/light")}
     assert {"key", "fill"} <= light_names
 
 
@@ -996,18 +1083,19 @@ def test_realistic_angle_bisector_controller_aligns_connector_rods() -> None:
         controller = env.mj_model.angle_bisector_controller
 
         assert controller.enabled
-        assert {
-            target.node_name for target in controller.targets
-        } == {"node_1", "node_2", "node_1_tri_triangle_2", "node_2_tri_triangle_2"}
+        assert {target.node_name for target in controller.targets} == {
+            "node_1",
+            "node_2",
+            "node_1_tri_triangle_2",
+            "node_2_tri_triangle_2",
+        }
         assert env.action_space.shape == (4,)
         assert env.mj_model.model.nu == 8
         assert all(
-            name.startswith("bisector_act_")
-            for name in env.mj_model.internal_actuator_names
+            name.startswith("bisector_act_") for name in env.mj_model.internal_actuator_names
         )
         assert not any(
-            name.startswith("bisector_act_")
-            for name in env.mj_model.external_actuator_names
+            name.startswith("bisector_act_") for name in env.mj_model.external_actuator_names
         )
 
         action = np.zeros(env.action_space.shape, dtype=np.float32)
@@ -1081,10 +1169,7 @@ def test_routed_shape_spec_compiles_and_runs() -> None:
     assert get_edge_index(spec).shape == (2, 8)
     root = ET.fromstring(spec.to_xml())
     assert root.find(".//equality/tendon[@name='Route_Length_Constraint_quad_1']") is None
-    actuator_names = {
-        actuator.get("name")
-        for actuator in root.findall(".//actuator/general")
-    }
+    actuator_names = {actuator.get("name") for actuator in root.findall(".//actuator/general")}
     assert actuator_names == {"act_12", "act_23", "act_34", "act_14"}
 
     env = MujocoTrussEnv(TrussEnvConfig(spec, max_steps=2, nsubsteps=1, speed=0.01))
@@ -1146,9 +1231,7 @@ def test_realistic_routed_shape_clones_nodes_and_adds_bisector_controller() -> N
         "node_4_route_path_2_3",
     }
     assert len(model.external_actuator_names) == 6
-    assert all(
-        not name.startswith("bisector_act_") for name in model.external_actuator_names
-    )
+    assert all(not name.startswith("bisector_act_") for name in model.external_actuator_names)
     for tendon_name, edge_length in model.get_edge_length_dict().items():
         if tendon_name.startswith("tendon_"):
             assert edge_length == pytest.approx(1.0, abs=0.05)
@@ -1206,29 +1289,21 @@ def test_realistic_routed_passive_cylinders_face_connector_rods() -> None:
         angular_actuator = root.find(
             f"./actuator/general[@name='bisector_angular_act_{node_name}']"
         )
-        roll_actuator = root.find(
-            f"./actuator/general[@name='bisector_roll_act_{node_name}']"
-        )
+        roll_actuator = root.find(f"./actuator/general[@name='bisector_roll_act_{node_name}']")
         if node_name in passive_nodes:
             assert angular_hinge is not None
-            assert float(angular_hinge.get("damping", "nan")) == pytest.approx(
-                HINGE_DAMPING
-            )
+            assert float(angular_hinge.get("damping", "nan")) == pytest.approx(HINGE_DAMPING)
             assert angular_actuator is not None
             assert angular_actuator.get("joint") == f"{node_name}_angular_hinge"
             assert roll_hinge is None
             assert roll_actuator is None
         else:
             assert angular_hinge is not None
-            assert float(angular_hinge.get("damping", "nan")) == pytest.approx(
-                HINGE_DAMPING
-            )
+            assert float(angular_hinge.get("damping", "nan")) == pytest.approx(HINGE_DAMPING)
             assert angular_actuator is not None
             assert angular_actuator.get("joint") == f"{node_name}_angular_hinge"
             assert roll_hinge is not None
-            assert float(roll_hinge.get("damping", "nan")) == pytest.approx(
-                HINGE_DAMPING
-            )
+            assert float(roll_hinge.get("damping", "nan")) == pytest.approx(HINGE_DAMPING)
             assert roll_actuator is not None
             assert roll_actuator.get("joint") == f"{node_name}_roll_hinge"
 
@@ -1252,16 +1327,13 @@ def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
                     ),
                 )[:2]
             )
-        neighbor_positions = [
-            model.data.site_xpos[site_id] for site_id in neighbor_site_ids
-        ]
+        neighbor_positions = [model.data.site_xpos[site_id] for site_id in neighbor_site_ids]
         if len(neighbor_positions) == 1:
             target_direction = _unit(node_pos - neighbor_positions[0])
             expected_dot = 1.0
         else:
             bisector = _unit(
-                _unit(neighbor_positions[0] - node_pos)
-                + _unit(neighbor_positions[1] - node_pos)
+                _unit(neighbor_positions[0] - node_pos) + _unit(neighbor_positions[1] - node_pos)
             )
             target_direction = -bisector
             expected_dot = 1.0
@@ -1286,8 +1358,7 @@ def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
                 angle,
             )
             rod_direction = _unit(
-                parent_xmat
-                @ _rotate_about_axis(yawed_rod, yawed_angular_axis, angular_angle)
+                parent_xmat @ _rotate_about_axis(yawed_rod, yawed_angular_axis, angular_angle)
             )
             assert float(np.dot(rod_direction, target_direction)) == pytest.approx(
                 1.0,
@@ -1397,9 +1468,7 @@ def test_realistic_routed_roll_hinges_are_active_node_controlled_only() -> None:
             continue
 
         roll_hinge = node_body.find(f"./joint[@name='{node_name}_roll_hinge']")
-        roll_actuator = root.find(
-            f"./actuator/general[@name='bisector_roll_act_{node_name}']"
-        )
+        roll_actuator = root.find(f"./actuator/general[@name='bisector_roll_act_{node_name}']")
         if node_name in passive_nodes:
             assert roll_hinge is None
             assert roll_actuator is None
@@ -1470,9 +1539,7 @@ def test_realistic_routed_roll_hinge_tracks_live_nearest_neighbor_plane() -> Non
         yawed_angular_axis,
         angular_angle,
     )
-    rolled_normal = _unit(
-        _rotate_about_axis(pitched_normal, pitched_roll_axis, roll_angle)
-    )
+    rolled_normal = _unit(_rotate_about_axis(pitched_normal, pitched_roll_axis, roll_angle))
 
     assert abs(float(np.dot(rolled_normal, target_normal_parent))) == pytest.approx(
         1.0,
@@ -1564,9 +1631,7 @@ def test_node_velocity_controller_uses_first_conflicting_route_orientation() -> 
         model.external_actuator_ids,
     )
 
-    assert [(edge.from_node, edge.to_node) for edge in controller.edges] == [
-        ("node_1", "node_2")
-    ]
+    assert [(edge.from_node, edge.to_node) for edge in controller.edges] == [("node_1", "node_2")]
 
 
 def test_node_velocity_command_env_steps_with_node_actions() -> None:
@@ -1670,10 +1735,13 @@ def test_realistic_logical_gnn_edge_index_matches_abstract_graph() -> None:
 
     assert realistic_edge_index.shape == abstract_edge_index.shape
     assert realistic_edge_index.shape == (2, 24)
-    assert int(np.max(realistic_edge_index)) < get_node_features(
-        realistic_model,
-        graph_view="logical",
-    ).shape[0]
+    assert (
+        int(np.max(realistic_edge_index))
+        < get_node_features(
+            realistic_model,
+            graph_view="logical",
+        ).shape[0]
+    )
 
 
 def test_realistic_logical_gnn_node_features_support_mean_aggregation() -> None:
@@ -1725,9 +1793,7 @@ def test_realistic_logical_gnn_node_features_support_connector_ball_aggregation(
     expected_node_1 = np.concatenate(
         [model.data.xpos[connector_ball_id], model.data.cvel[connector_ball_id][3:]]
     )
-    expected_node_3 = np.concatenate(
-        [model.data.xpos[node_3_id], model.data.cvel[node_3_id][3:]]
-    )
+    expected_node_3 = np.concatenate([model.data.xpos[node_3_id], model.data.cvel[node_3_id][3:]])
 
     assert logical_features.shape == (4, 6)
     np.testing.assert_allclose(logical_features[0], expected_node_1)
@@ -1798,9 +1864,7 @@ def _edge_tendon_neighbors(root: ET.Element) -> dict[str, tuple[str, ...]]:
         if not spatial.get("name", "").startswith("tendon_"):
             continue
         sites = [
-            site_ref.get("site")
-            for site_ref in spatial.findall("site")
-            if site_ref.get("site")
+            site_ref.get("site") for site_ref in spatial.findall("site") if site_ref.get("site")
         ]
         if len(sites) != 2:
             continue

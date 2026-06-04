@@ -18,8 +18,8 @@ the package is treated as stable research infrastructure.
 Supported workflows include:
 
 - Generate MuJoCo `MjSpec` models for triangle-based truss structures.
-- Use built-in `"octahedron"`, `"icosahedron"`, `"solar_array"`, and
-  `"tetrahedron"` presets.
+- Use built-in `"octahedron"`, `"icosahedron"`, `"solar_array"`,
+  `"tetrahedron"`, and Usevitch et al. triangle-decomposable graph presets.
 - Build abstract slide-joint models or realistic triangle-body models.
 - Save generated MuJoCo XML.
 - Wrap generated models in Gymnasium-compatible environments.
@@ -137,6 +137,12 @@ python examples/custom_truss.py
 ## Citation
 
 There is no formal citation for this package yet.
+
+The Usevitch graph presets are based on:
+
+Nathan Usevitch, Isaac Weaver, and James Usevitch. "Triangle-Decomposable
+Graphs for Isoperimetric Robots." arXiv:2505.01624, 2025.
+<https://arxiv.org/abs/2505.01624>
 
 ## License
 

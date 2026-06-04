@@ -65,7 +65,7 @@ REALISTIC_ACTUATOR_KP = 1000.0
 # Critical damping ratio used when deriving tendon actuator damping.
 ACTUATOR_DAMPRATIO = 1.0
 # Nominal mass used to convert realistic tendon kp/dampratio into kv.
-REALISTIC_ACTUATOR_NOMINAL_MASS = 1.0
+REALISTIC_ACTUATOR_NOMINAL_MASS = 0.1
 # Geometry-scaled tendon range lower multiplier.
 TENDON_RANGE_MIN_FACTOR = 0.5
 # Geometry-scaled tendon range upper multiplier.
