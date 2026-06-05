@@ -8,8 +8,8 @@ the package is treated as stable research infrastructure.
 ## Current Scope
 
 - Generate MuJoCo `MjSpec` models for triangle-based truss structures.
-- Generate built-in octahedron, icosahedron, solar-array, and tetrahedron
-  presets.
+- Generate built-in octahedron, icosahedron, solar-array, tetrahedron, and
+  Usevitch et al. triangle-decomposable graph presets.
 - Build either an abstract per-node slide-joint model or a more realistic
   triangle-body model with connector balls, rods, and face-aligned shared-node
   connectors.
@@ -21,8 +21,8 @@ the package is treated as stable research infrastructure.
 
 ## Known Limitations
 
-- The named preset registry is intentionally small. Current presets are
-  `"octahedron"`, `"icosahedron"`, `"solar_array"`, and `"tetrahedron"`.
+- The named preset registry includes hand-authored base structures plus
+  generated Usevitch et al. graph presets named by paper graph label.
 - Custom robot definitions are supported through dictionaries.
 - The default rewards are research defaults, not task-independent objectives.
 - The environment classes are starting points. Most reinforcement learning,

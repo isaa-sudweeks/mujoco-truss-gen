@@ -134,7 +134,9 @@ def add_actuator(
     )
     if used_names is not None:
         used_names.add(actuator_name)
-    actuator.set_to_intvelocity(kp=kp, dampratio=dampratio)
+    # Manually compute kv using a nominal mass to avoid compiler over-estimation due to constraints
+    kv = 2.0 * dampratio * np.sqrt(kp * params.realistic_actuator_nominal_mass)
+    actuator.set_to_intvelocity(kp=kp, kv=kv)
 
 
 def add_realistic_actuator(
