@@ -164,6 +164,44 @@ def test_usevitch_embedding_candidates_normalize_mean_edge_length() -> None:
     assert np.mean(edge_lengths) == pytest.approx(1.0)
 
 
+def test_usevitch_embedding_search_avoids_near_singular_presets() -> None:
+    for graph_label in preset_module.USEVITCH_GRAPH_LABELS:
+        node_count = preset_module._node_count_from_usevitch_label(graph_label)
+        edges = tuple(sorted(preset_module._usevitch_edges_from_label(graph_label, node_count)))
+        coordinates = preset_module._best_usevitch_embedding(graph_label, node_count, edges)
+
+        wcri = preset_module._worst_case_rigidity_index(coordinates, edges)
+
+        assert wcri > 1e-4
+
+
+def test_usevitch_embedding_search_skips_fallback_when_default_is_rigid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def fake_search(
+        node_count: int,
+        edges: tuple[tuple[int, int], ...],
+        rng: np.random.Generator,
+        distance_parameters: tuple[float, float, float],
+        best_coordinates: np.ndarray | None,
+        best_wcri: float,
+        best_edge_rms_error: float,
+    ) -> tuple[np.ndarray | None, float, float]:
+        calls.append(distance_parameters)
+        return np.ones((node_count, 3), dtype=float), 2e-4, 0.0
+
+    preset_module._best_usevitch_embedding.cache_clear()
+    monkeypatch.setattr(preset_module, "_search_usevitch_mds_parameters", fake_search)
+    try:
+        preset_module._best_usevitch_embedding(1514879, 7, ((0, 1),))
+    finally:
+        preset_module._best_usevitch_embedding.cache_clear()
+
+    assert calls == [preset_module.USEVITCH_MDS_DEFAULT_DISTANCE_PARAMETERS]
+
+
 def test_builtin_preset_definitions_support_unit_scale() -> None:
     unscaled_nodes, unscaled_structure = get_preset_definition("octahedron")
     same_nodes, same_structure = get_preset_definition("octahedron", scale=1.0)

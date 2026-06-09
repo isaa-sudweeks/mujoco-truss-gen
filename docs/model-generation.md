@@ -115,15 +115,20 @@ caller.
   exact-cover criterion: enumerate every graph 3-cycle, then select
   edge-disjoint triangles that cover every graph edge exactly once. The integer
   programming formulations described in the paper are not used for these small
-  built-in preset graphs. Node positions are generated with the paper's
-  multidimensional-scaling embedding search: each trial assigns random
-  distances to connected node pairs, assigns distance `10` to disjoint node
-  pairs, and computes a 3D MDS embedding. Each MDS candidate is then rescaled
-  so the mean structural edge length is `1.0`, which keeps model sizes close to
-  the other built-in presets without changing the candidate's shape. The
-  selected embedding is the candidate with the largest worst case rigidity
-  index; when candidates have nearly identical rigidity index values, the
-  tie-breaker is the smaller RMS error from unit structural edge lengths.
+  built-in preset graphs. Node positions are generated with a
+  multidimensional-scaling embedding search based on the paper's graph-derived
+  distance matrices: each trial assigns random distances to connected node
+  pairs, assigns a larger fixed distance to disjoint node pairs, and computes a
+  3D MDS embedding. The default search uses the paper-style `[0, 1)` connected
+  range with disjoint-pair distance `10`; if that search does not find a
+  candidate with worst case rigidity index above `1e-4`, a fallback search
+  evaluates several connected-distance ranges and disjoint-pair distances.
+  Each MDS candidate is then rescaled so the mean structural edge length is
+  `1.0`, which keeps model sizes close to the other built-in presets without
+  changing the candidate's shape. The selected embedding is the candidate with
+  the largest worst case rigidity index; when candidates have nearly identical
+  rigidity index values, the tie-breaker is the smaller RMS error from unit
+  structural edge lengths.
 - `get_perimeter(node_dict, triangle_dict)` computes each triangle perimeter
   from the first three vertices.
 - `save_xml(spec, filename)` writes `spec.to_xml()` to disk and returns the

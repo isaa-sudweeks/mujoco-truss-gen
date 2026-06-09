@@ -167,6 +167,19 @@ USEVITCH_GRAPH_LABELS: tuple[int, ...] = (
 )
 USEVITCH_EMBEDDING_TRIALS = 64
 USEVITCH_DISCONNECTED_DISTANCE = 10.0
+USEVITCH_MDS_WCRI_FALLBACK_THRESHOLD = 1e-4
+USEVITCH_MDS_DEFAULT_DISTANCE_PARAMETERS = (0.0, 1.0, USEVITCH_DISCONNECTED_DISTANCE)
+USEVITCH_MDS_FALLBACK_DISTANCE_PARAMETER_SETS: tuple[tuple[float, float, float], ...] = (
+    (0.0, 1.0, 1.5),
+    (0.0, 1.0, 2.0),
+    (0.5, 1.5, 1.5),
+    (0.5, 1.5, 2.0),
+    (0.5, 1.5, 2.5),
+    (0.5, 1.5, 3.0),
+    (0.75, 1.25, 1.5),
+    (0.75, 1.25, 2.0),
+    (0.75, 1.25, 3.0),
+)
 USEVITCH_MDS_MAX_ITERATIONS = 300
 USEVITCH_MDS_TOLERANCE = 1e-9
 USEVITCH_WCRI_TIE_RELATIVE_TOLERANCE = 0.01
@@ -294,13 +307,64 @@ def _best_usevitch_embedding(
     node_count: int,
     edges: tuple[tuple[int, int], ...],
 ) -> np.ndarray:
-    rng = np.random.default_rng(graph_label)
     best_coordinates: np.ndarray | None = None
     best_wcri = -np.inf
     best_edge_rms_error = np.inf
 
+    best_coordinates, best_wcri, best_edge_rms_error = _search_usevitch_mds_parameters(
+        node_count,
+        edges,
+        np.random.default_rng(graph_label),
+        USEVITCH_MDS_DEFAULT_DISTANCE_PARAMETERS,
+        best_coordinates,
+        best_wcri,
+        best_edge_rms_error,
+    )
+    if best_coordinates is not None and best_wcri > USEVITCH_MDS_WCRI_FALLBACK_THRESHOLD:
+        return _normalize_usevitch_embedding(best_coordinates)
+
+    for parameter_index, distance_parameters in enumerate(
+        USEVITCH_MDS_FALLBACK_DISTANCE_PARAMETER_SETS,
+        start=1,
+    ):
+        best_coordinates, best_wcri, best_edge_rms_error = _search_usevitch_mds_parameters(
+            node_count,
+            edges,
+            np.random.default_rng([graph_label, parameter_index]),
+            distance_parameters,
+            best_coordinates,
+            best_wcri,
+            best_edge_rms_error,
+        )
+
+    if best_coordinates is None:
+        raise ValueError(f"Could not embed Usevitch graph label {graph_label}.")
+    return _normalize_usevitch_embedding(best_coordinates)
+
+
+def _search_usevitch_mds_parameters(
+    node_count: int,
+    edges: tuple[tuple[int, int], ...],
+    rng: np.random.Generator,
+    distance_parameters: tuple[float, float, float],
+    best_coordinates: np.ndarray | None,
+    best_wcri: float,
+    best_edge_rms_error: float,
+) -> tuple[np.ndarray | None, float, float]:
+    (
+        connected_distance_min,
+        connected_distance_max,
+        disconnected_distance,
+    ) = distance_parameters
     for _ in range(USEVITCH_EMBEDDING_TRIALS + 1):
-        distances = _random_usevitch_distance_matrix(node_count, edges, rng)
+        distances = _random_usevitch_distance_matrix(
+            node_count,
+            edges,
+            rng,
+            connected_distance_min=connected_distance_min,
+            connected_distance_max=connected_distance_max,
+            disconnected_distance=disconnected_distance,
+        )
         coordinates = _metric_mds(
             distances,
             dimensions=3,
@@ -319,24 +383,25 @@ def _best_usevitch_embedding(
             best_wcri = wcri
             best_edge_rms_error = edge_rms_error
 
-    if best_coordinates is None:
-        raise ValueError(f"Could not embed Usevitch graph label {graph_label}.")
-    return _normalize_usevitch_embedding(best_coordinates)
+    return best_coordinates, best_wcri, best_edge_rms_error
 
 
 def _random_usevitch_distance_matrix(
     node_count: int,
     edges: tuple[tuple[int, int], ...],
     rng: np.random.Generator,
+    connected_distance_min: float = 0.0,
+    connected_distance_max: float = 1.0,
+    disconnected_distance: float = USEVITCH_DISCONNECTED_DISTANCE,
 ) -> np.ndarray:
     distances = np.full(
         (node_count, node_count),
-        USEVITCH_DISCONNECTED_DISTANCE,
+        disconnected_distance,
         dtype=float,
     )
     np.fill_diagonal(distances, 0.0)
     for first, second in edges:
-        edge_distance = float(rng.random())
+        edge_distance = float(rng.uniform(connected_distance_min, connected_distance_max))
         distances[first, second] = edge_distance
         distances[second, first] = edge_distance
     return distances
