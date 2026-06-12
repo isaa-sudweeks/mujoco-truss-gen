@@ -193,8 +193,9 @@ quit
   of the adjacent edges. `connector_rod_length` is an absolute nominal length;
   for regular triangles it is the length of every rod, while irregular custom
   triangles use it as the mean rod length so each triangle remains rigid and
-  its tendon geometry is not distorted. If it is omitted, the legacy
-  dimensionless `realistic_node_clone_offset` behavior is used. In routed shape
+  its tendon geometry is not distorted. The default is absolute and independent
+  of preset scale. Set `connector_rod_length=None` to use the legacy
+  scale-proportional `realistic_node_clone_offset` behavior. In routed shape
   dictionaries, passive route endpoints
   are rendered as cylinders with their flat-face normal aligned to the connector
   rod and diameter matched to the edge tendon width. The routed-tube

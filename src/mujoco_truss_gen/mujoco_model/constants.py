@@ -22,6 +22,8 @@ CONNECTOR_MASS = 0.05
 ROD_RADIUS = 0.025
 # Mass of each connector rod.
 ROD_MASS = 0.05
+# Default absolute nominal connector rod length.
+CONNECTOR_ROD_LENGTH = 0.2886751345948129
 # Inertial mass assigned to each realistic triangle body shell.
 TRIANGLE_BODY_MASS = 0.01
 # Gravity compensation applied to realistic triangle body shells.
@@ -154,9 +156,9 @@ class TrussPhysicalParameters:
     actuator_range_min_factor: float = ACTUATOR_RANGE_MIN_FACTOR
     actuator_range_max_factor: float = ACTUATOR_RANGE_MAX_FACTOR
     realistic_node_clone_offset: float = REALISTIC_NODE_CLONE_OFFSET
-    # Absolute nominal connector rod length. When set, this takes precedence
-    # over realistic_node_clone_offset so model scale does not scale the rods.
-    connector_rod_length: float | None = None
+    # Absolute nominal connector rod length. Set to None to use the legacy
+    # scale-proportional realistic_node_clone_offset behavior.
+    connector_rod_length: float | None = CONNECTOR_ROD_LENGTH
     orientation_weld_solref: list[float] = field(
         default_factory=lambda: list(ORIENTATION_WELD_SOLREF)
     )
