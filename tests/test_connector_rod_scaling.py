@@ -61,7 +61,14 @@ def test_absolute_connector_rod_length_is_independent_of_preset_scale() -> None:
     np.testing.assert_allclose(large_tendons, 4.0 * small_tendons, rtol=2e-4, atol=2e-5)
 
 
-def test_default_clone_offset_keeps_legacy_scale_proportional_rods() -> None:
+def test_default_connector_rod_length_is_independent_of_preset_scale() -> None:
+    unit_rods = _connector_rod_lengths(1.0, TrussPhysicalParameters().connector_rod_length)
+    doubled_rods = _connector_rod_lengths(2.0, TrussPhysicalParameters().connector_rod_length)
+
+    np.testing.assert_allclose(doubled_rods, unit_rods, rtol=2e-4, atol=2e-5)
+
+
+def test_none_connector_rod_length_keeps_legacy_scale_proportional_rods() -> None:
     unit_rods = _connector_rod_lengths(1.0, None)
     doubled_rods = _connector_rod_lengths(2.0, None)
 
