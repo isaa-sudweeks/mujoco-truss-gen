@@ -154,6 +154,9 @@ class TrussPhysicalParameters:
     actuator_range_min_factor: float = ACTUATOR_RANGE_MIN_FACTOR
     actuator_range_max_factor: float = ACTUATOR_RANGE_MAX_FACTOR
     realistic_node_clone_offset: float = REALISTIC_NODE_CLONE_OFFSET
+    # Absolute nominal connector rod length. When set, this takes precedence
+    # over realistic_node_clone_offset so model scale does not scale the rods.
+    connector_rod_length: float | None = None
     orientation_weld_solref: list[float] = field(
         default_factory=lambda: list(ORIENTATION_WELD_SOLREF)
     )
