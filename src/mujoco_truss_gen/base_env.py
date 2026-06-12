@@ -63,6 +63,7 @@ class TrussEnvConfig:
     control_noise_relative: bool = True
     runtime_apply_control_noise: bool = False
     domain_randomization: DomainRandomizationConfig | None = None
+    # Applied after size normalization, in initial bounding-box diagonals per second.
     max_forward_velocity: float | None = 1.0
     zero_positive_forward_reward_on_termination: bool = True
     collapse_penalty: float = 0.0
@@ -393,14 +394,20 @@ class MujocoTrussEnv(gym.Env):
             raw_forward_vel = 0.0 if dt <= 0.0 else com_delta_x / dt
 
         reward_forward_vel = float(raw_forward_vel) if np.isfinite(raw_forward_vel) else 0.0
+        position_scale = max(float(self.mj_model.initial_bounding_box_diagonal), 1e-8)
+        normalized_forward_vel_raw = reward_forward_vel / position_scale
         if self.config.max_forward_velocity is None:
-            forward_vel = reward_forward_vel
+            normalized_forward_vel = normalized_forward_vel_raw
         else:
             velocity_limit = abs(float(self.config.max_forward_velocity))
-            forward_vel = float(np.clip(reward_forward_vel, -velocity_limit, velocity_limit))
+            normalized_forward_vel = float(
+                np.clip(normalized_forward_vel_raw, -velocity_limit, velocity_limit)
+            )
 
         if terminated and self.config.zero_positive_forward_reward_on_termination:
-            forward_vel = min(forward_vel, 0.0)
+            normalized_forward_vel = min(normalized_forward_vel, 0.0)
+
+        forward_vel = normalized_forward_vel * position_scale
 
         energy_penalty = float(np.sum(np.square(action)))
         if terminated and self.config.zero_velocity_shaping_on_termination:
@@ -410,11 +417,7 @@ class MujocoTrussEnv(gym.Env):
             if not np.isfinite(slip_penalty):
                 slip_penalty = 0.0
 
-        forward_reward = (
-            self.config.forward_weight
-            * forward_vel
-            / max(float(self.mj_model.initial_bounding_box_diagonal), 1e-8)
-        )
+        forward_reward = self.config.forward_weight * normalized_forward_vel
         energy_reward = -self.config.energy_weight * energy_penalty
         rigidity_reward = self.config.rigidity_weight * critical_eig
         if terminated and self.config.zero_rigidity_reward_on_termination:
@@ -436,6 +439,8 @@ class MujocoTrussEnv(gym.Env):
             "forward": forward_reward,
             "forward_velocity": forward_vel,
             "forward_velocity_raw": float(raw_forward_vel),
+            "forward_velocity_normalized": normalized_forward_vel,
+            "forward_velocity_normalized_raw": normalized_forward_vel_raw,
             "com_delta_x": com_delta_x,
             "alive": alive_reward,
             "energy": energy_reward,

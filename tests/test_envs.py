@@ -475,7 +475,7 @@ def test_nonfinite_nonterminal_velocity_and_slip_are_sanitized_for_reward() -> N
         env.close()
 
 
-def test_nonterminal_forward_reward_uses_clipped_com_displacement_velocity() -> None:
+def test_nonterminal_forward_reward_clips_normalized_com_velocity() -> None:
     env = MujocoTrussEnv(
         TrussEnvConfig(
             get_mujoco_spec("octahedron", realistic=False),
@@ -499,14 +499,16 @@ def test_nonterminal_forward_reward_uses_clipped_com_displacement_velocity() -> 
         action = np.zeros(env.action_space.shape, dtype=np.float32)
         reward, info, terminated = env._compute_reward(action, np.zeros(3, dtype=float))
 
-        expected_forward = (
-            env.config.forward_weight
-            * env.config.max_forward_velocity
-            / env.mj_model.initial_bounding_box_diagonal
+        expected_forward = env.config.forward_weight * env.config.max_forward_velocity
+        expected_physical_velocity = (
+            env.config.max_forward_velocity * env.mj_model.initial_bounding_box_diagonal
         )
         assert not terminated
-        assert info["forward_velocity_raw"] > env.config.max_forward_velocity
-        assert info["forward_velocity"] == pytest.approx(env.config.max_forward_velocity)
+        assert info["forward_velocity_normalized_raw"] > env.config.max_forward_velocity
+        assert info["forward_velocity_normalized"] == pytest.approx(
+            env.config.max_forward_velocity
+        )
+        assert info["forward_velocity"] == pytest.approx(expected_physical_velocity)
         assert info["com_delta_x"] == pytest.approx(1.0)
         assert info["forward"] == pytest.approx(expected_forward)
         assert reward == pytest.approx(expected_forward)
@@ -541,8 +543,46 @@ def test_max_forward_velocity_none_disables_com_velocity_clipping() -> None:
         assert not terminated
         assert info["forward_velocity_raw"] > 1.0
         assert info["forward_velocity"] == pytest.approx(info["forward_velocity_raw"])
+        assert info["forward_velocity_normalized"] == pytest.approx(
+            info["forward_velocity_normalized_raw"]
+        )
     finally:
         env.close()
+
+
+def test_normalized_velocity_clipping_is_scale_invariant() -> None:
+    rewards = []
+    for scale in (0.5, 2.0):
+        env = MujocoTrussEnv(
+            TrussEnvConfig(
+                get_mujoco_spec("octahedron", scale=scale, realistic=False),
+                forward_weight=3.0,
+                energy_weight=0.0,
+                alive_bonus=0.0,
+                rigidity_weight=0.0,
+                slip_weight=0.0,
+                critical_eig_threshold=0.0,
+                max_forward_velocity=0.25,
+            )
+        )
+        try:
+            env.mj_model.get_forward_velocity = lambda env=env: (
+                2.0 * env.mj_model.initial_bounding_box_diagonal
+            )
+            env.mj_model.collapse_check = lambda: 1.0
+            env.mj_model.get_slip_penalty = lambda height: 0.0
+
+            action = np.zeros(env.action_space.shape, dtype=np.float32)
+            reward, info, terminated = env._compute_reward(action)
+
+            assert not terminated
+            assert info["forward_velocity_normalized_raw"] == pytest.approx(2.0)
+            assert info["forward_velocity_normalized"] == pytest.approx(0.25)
+            rewards.append(reward)
+        finally:
+            env.close()
+
+    assert rewards == pytest.approx([0.75, 0.75])
 
 
 def test_reset_reinitializes_scaled_tendon_actuator_lengths() -> None:

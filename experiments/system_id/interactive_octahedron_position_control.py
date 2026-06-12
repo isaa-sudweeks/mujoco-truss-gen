@@ -36,24 +36,26 @@ from mujoco_truss_gen.mujoco_model.tendons import initialize_actuator_lengths
 # Editable experiment parameters
 # -----------------------------------------------------------------------------
 
+# Here is what I got to work -15000,0,-4000,-8000,0,15000,8000,4000
+
 ROBOT_SCALE = 1.27
-CONNECTOR_ROD_LENGTH = 0.288675
+CONNECTOR_ROD_LENGTH = 0.22289
 
 PHYSICAL_PARAMS = TrussPhysicalParameters(
-    active_node_mass=0.1,
-    passive_node_mass=0.1,
+    active_node_mass=1.98,
+    passive_node_mass=1.0,
     connector_radius=0.05,
-    connector_mass=0.05,
+    connector_mass=0.1,
     rod_radius=0.025,
-    rod_mass=0.05,
+    rod_mass=0.426655,
     triangle_body_mass=0.01,
     triangle_body_gravcomp=1.0,
-    hinge_position_kp=10.0,
-    hinge_damping=1.0,
-    realistic_actuator_kp=1000.0,
+    hinge_position_kp=100.0,
+    hinge_damping=10.0,
+    realistic_actuator_kp=10000.0,
     actuator_dampratio=1.0,
-    realistic_actuator_nominal_mass=0.1,
-    actuator_ctrl_range=[-0.1, 0.1],
+    realistic_actuator_nominal_mass=1.98,
+    actuator_ctrl_range=[-0.05, 0.05],
     default_actuator_range=[0.0, 3.0],
     edge_tendon_width=0.05,
     realistic_node_clone_offset=0.5,
@@ -67,7 +69,7 @@ GEOM_FRICTION = np.array([1.0, 0.005, 0.0001], dtype=float)
 # Position error [m] -> intvelocity input [m/s].
 POSITION_GAIN = 4.0
 # Multiplies every value entered in a terminal position array.
-POSITION_COMMAND_SCALE = 0.01 * 0.0254
+POSITION_COMMAND_SCALE = 0.0254/1125
 MAX_NODE_POSITION_OFFSET = 1.0
 STEPS_PER_CONTROL_UPDATE = 5
 RESET_SEED = 0
