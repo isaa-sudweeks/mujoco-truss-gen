@@ -53,6 +53,7 @@ def clone_shared_nodes(
     node_dict: NodeDict,
     triangle_dict: TriangleDict,
     clone_offset: float = REALISTIC_NODE_CLONE_OFFSET,
+    connector_rod_length: float | None = None,
     min_node_center_z: float = MIN_NODE_CENTER_Z,
 ) -> tuple[dict[str, np.ndarray], dict[str, list[str]], np.ndarray, float]:
     """Clone shared nodes so each triangle has independent planar node bodies.
@@ -65,6 +66,22 @@ def clone_shared_nodes(
     }
     positions = np.array(list(original_node_dict.values()))
     center = np.mean(positions, axis=0)
+    if connector_rod_length is not None:
+        connector_rod_length = _validate_connector_rod_length(connector_rod_length)
+        centroid_radii = []
+        for triangle_nodes in triangle_dict.values():
+            triangle_centroid = np.mean(
+                [original_node_dict[node] for node in triangle_nodes[:3]],
+                axis=0,
+            )
+            centroid_radii.extend(
+                float(np.linalg.norm(original_node_dict[node] - triangle_centroid))
+                for node in triangle_nodes[:3]
+            )
+        mean_centroid_radius = float(np.mean(centroid_radii))
+        if mean_centroid_radius <= 1e-10:
+            raise ValueError("Cannot set connector_rod_length for degenerate triangles.")
+        clone_offset = connector_rod_length / mean_centroid_radius
     scale = 1.0 + clone_offset
 
     node_instances = {name: [] for name in original_node_dict}
@@ -122,6 +139,7 @@ def clone_routed_nodes(
     node_dict: NodeDict,
     shape_dict: ShapeDict,
     clone_offset: float = REALISTIC_NODE_CLONE_OFFSET,
+    connector_rod_length: float | None = None,
     min_node_center_z: float = MIN_NODE_CENTER_Z,
 ) -> tuple[dict[str, np.ndarray], dict[str, list[str]], np.ndarray, float, dict[str, np.ndarray]]:
     """Clone routed node occurrences and offset them along local route bisectors."""
@@ -164,14 +182,18 @@ def clone_routed_nodes(
             for index in range(len(new_route) - 1)
         ]
 
-    offset_length = _choose_routed_offset_length(
-        new_node_dict,
-        shape_dict,
-        node_instances,
-        ball_positions,
-        hinge_axes,
-        mean_edge_length,
-        REALISTIC_ROUTED_TARGET_EDGE_LENGTH,
+    offset_length = (
+        _validate_connector_rod_length(connector_rod_length)
+        if connector_rod_length is not None
+        else _choose_routed_offset_length(
+            new_node_dict,
+            shape_dict,
+            node_instances,
+            ball_positions,
+            hinge_axes,
+            mean_edge_length,
+            REALISTIC_ROUTED_TARGET_EDGE_LENGTH,
+        )
     )
     new_node_dict = _routed_clone_positions_for_offset(
         shape_dict,
@@ -486,6 +508,7 @@ def build_triangle(
             node_dict,
             triangle_dict,
             clone_offset=params.realistic_node_clone_offset,
+            connector_rod_length=params.connector_rod_length,
             min_node_center_z=params.min_node_center_z,
         )
         create_triangle_bodies(
@@ -541,6 +564,7 @@ def build_shapes(
             node_dict,
             shape_dict,
             clone_offset=params.realistic_node_clone_offset,
+            connector_rod_length=params.connector_rod_length,
             min_node_center_z=params.min_node_center_z,
         )
         build_realistic_shapes(
@@ -836,6 +860,13 @@ def _unit_vector(vector: np.ndarray) -> np.ndarray | None:
     if norm < 1e-10:
         return None
     return vector / norm
+
+
+def _validate_connector_rod_length(connector_rod_length: float) -> float:
+    connector_rod_length = float(connector_rod_length)
+    if not np.isfinite(connector_rod_length) or connector_rod_length <= 0.0:
+        raise ValueError("connector_rod_length must be greater than zero.")
+    return connector_rod_length
 
 
 def _triangle_node_masses(

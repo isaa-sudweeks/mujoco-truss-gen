@@ -97,7 +97,9 @@ caller.
   connector balls by in-plane bisector rods.
 - `get_mujoco_spec("octahedron", realistic=False, scale=1.0)` and the other
   names in `PRESETS` build built-in presets. Increase or decrease `scale` to
-  generate the same preset in a different unit scale.
+  generate the same preset with different structural tendon lengths. For a
+  realistic model, set `TrussPhysicalParameters(connector_rod_length=...)` to
+  keep the nominal connector rod length fixed independently of preset scale.
 - `get_mujoco_spec(node_dict, triangle_dict, realistic=False)` builds a custom
   dictionary-defined truss.
 - `get_mujoco_spec(node_dict, shape_dict, realistic=False)` builds a routed
@@ -188,7 +190,12 @@ quit
   shared logical nodes are connected through connector balls. Connector rods are
   initialized in the original local route or triangle plane, and the internal
   bisector controller keeps each rod aligned with the projected angle bisector
-  of the adjacent edges. In routed shape dictionaries, passive route endpoints
+  of the adjacent edges. `connector_rod_length` is an absolute nominal length;
+  for regular triangles it is the length of every rod, while irregular custom
+  triangles use it as the mean rod length so each triangle remains rigid and
+  its tendon geometry is not distorted. If it is omitted, the legacy
+  dimensionless `realistic_node_clone_offset` behavior is used. In routed shape
+  dictionaries, passive route endpoints
   are rendered as cylinders with their flat-face normal aligned to the connector
   rod and diameter matched to the edge tendon width. The routed-tube
   `realistic=True` path is still incomplete and should be treated as a known
