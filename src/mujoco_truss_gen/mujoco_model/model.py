@@ -6,6 +6,10 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from mujoco_truss_gen.mujoco_model.control_graph import (
+    ControlGraphMetadata,
+    control_graph_metadata_from_xml,
+)
 from mujoco_truss_gen.mujoco_model.controllers import (
     ANGLE_BISECTOR_ACTUATOR_PREFIX,
     ANGULAR_BISECTOR_ACTUATOR_PREFIX,
@@ -99,6 +103,7 @@ class MujocoModel:
 
     def _load_model_metadata_from_xml(self, xml: str) -> None:
         root = ET.fromstring(xml)
+        self.control_graph = control_graph_metadata_from_xml(xml)
 
         self.node_names: list[str] = []
         self.node_axes: dict[str, tuple[str, ...]] = {}
@@ -147,6 +152,7 @@ class MujocoModel:
         self.structural_edges = self._structural_edges_from_xml(root)
 
     def _load_model_metadata_from_model(self) -> None:
+        self.control_graph = ControlGraphMetadata.empty()
         self.node_names = [
             self.model.body(body_id).name
             for body_id in range(self.model.nbody)
@@ -321,6 +327,55 @@ class MujocoModel:
         return np.array(
             [self.data.cvel[self.node_body_ids[node_name]][3:] for node_name in self.node_names]
         )
+
+    @property
+    def control_node_names(self) -> list[str]:
+        return list(self.control_graph.control_node_names)
+
+    def get_control_node_position_dict(self) -> dict[str, np.ndarray]:
+        return {
+            control_node_name: self.data.xpos[
+                self.node_body_ids[self._physical_node_for_control_node(control_node_name)]
+            ].copy()
+            for control_node_name in self.control_graph.control_node_names
+        }
+
+    def get_control_node_velocity_linear_dict(self) -> dict[str, np.ndarray]:
+        return {
+            control_node_name: self.data.cvel[
+                self.node_body_ids[self._physical_node_for_control_node(control_node_name)]
+            ][3:].copy()
+            for control_node_name in self.control_graph.control_node_names
+        }
+
+    def get_control_node_position_matrix(self) -> np.ndarray:
+        return np.array(
+            [
+                self.data.xpos[
+                    self.node_body_ids[self._physical_node_for_control_node(control_node_name)]
+                ]
+                for control_node_name in self.control_graph.control_node_names
+            ]
+        )
+
+    def get_control_node_linear_velocity_matrix(self) -> np.ndarray:
+        return np.array(
+            [
+                self.data.cvel[
+                    self.node_body_ids[self._physical_node_for_control_node(control_node_name)]
+                ][3:]
+                for control_node_name in self.control_graph.control_node_names
+            ]
+        )
+
+    def _physical_node_for_control_node(self, control_node_name: str) -> str:
+        physical_node = self.control_graph.control_node_to_physical_node[control_node_name]
+        if physical_node not in self.node_body_ids:
+            raise ValueError(
+                f"Control node {control_node_name!r} maps to unknown physical node "
+                f"{physical_node!r}."
+            )
+        return physical_node
 
     def _node_bounding_box_dimensions(self) -> np.ndarray:
         positions = self.get_node_position_matrix()

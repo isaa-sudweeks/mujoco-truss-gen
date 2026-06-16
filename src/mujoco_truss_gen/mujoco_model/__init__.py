@@ -16,7 +16,11 @@ from mujoco_truss_gen.mujoco_model.builders import (
 from mujoco_truss_gen.mujoco_model.constants import TrussPhysicalParameters
 from mujoco_truss_gen.mujoco_model.controllers import NodeVelocityController
 from mujoco_truss_gen.mujoco_model.geometry import get_perimeter, get_route_lengths
-from mujoco_truss_gen.mujoco_model.gnn_utilities import get_edge_index, get_node_features
+from mujoco_truss_gen.mujoco_model.gnn_utilities import (
+    get_edge_index,
+    get_edge_types,
+    get_node_features,
+)
 from mujoco_truss_gen.mujoco_model.io_viewer import (
     save_xml,
     view,
@@ -56,6 +60,7 @@ __all__ = [
     "create_node_bodies",
     "create_triangle_bodies",
     "get_edge_index",
+    "get_edge_types",
     "get_icosahedron_definition",
     "get_mujoco_spec",
     "get_node_features",

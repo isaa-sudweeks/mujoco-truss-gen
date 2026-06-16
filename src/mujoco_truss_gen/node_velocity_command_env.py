@@ -33,8 +33,8 @@ class MujocoNodeVelocityCommandEnv(MujocoRelativeObsEnv):
         )
         if not self.node_velocity_controller.enabled:
             raise ValueError(
-                "MujocoNodeVelocityCommandEnv requires a routed continuous-tube model "
-                "with route tendons and edge actuators."
+                "MujocoNodeVelocityCommandEnv requires a model with control graph metadata "
+                "or a routed continuous-tube model with route tendons and edge actuators."
             )
         super()._on_model_changed()
 
@@ -45,6 +45,36 @@ class MujocoNodeVelocityCommandEnv(MujocoRelativeObsEnv):
             shape=(len(self.node_velocity_controller.node_names),),
             dtype=np.float32,
         )
+
+    def _get_obs(self) -> np.ndarray:
+        node_positions = self.mj_model.get_control_node_position_matrix()
+        node_velocities = self.mj_model.get_control_node_linear_velocity_matrix()
+        if node_positions.size == 0 or node_velocities.size == 0:
+            node_positions = self.mj_model.get_node_position_matrix()
+            node_velocities = self.mj_model.get_node_linear_velocity_matrix()
+
+        com = np.mean(node_positions, axis=0) if node_positions.size else np.zeros(3)
+        normalize_observations = bool(self.config.normalize_observations)
+        bbox_dimensions = self.mj_model.initial_bounding_box_dimensions
+
+        relative_positions = []
+        absolute_velocities = []
+        for pos, vel in zip(node_positions, node_velocities, strict=False):
+            for axis_idx in range(3):
+                divisor = bbox_dimensions[axis_idx] if normalize_observations else 1.0
+                if axis_idx == 2:
+                    relative_positions.append(pos[axis_idx] / divisor)
+                else:
+                    relative_positions.append((pos[axis_idx] - com[axis_idx]) / divisor)
+                absolute_velocities.append(vel[axis_idx] / divisor)
+
+        return np.concatenate(
+            [
+                np.array(relative_positions, dtype=np.float32),
+                np.array(absolute_velocities, dtype=np.float32),
+                self.node_velocity_controller.latest_node_commands.astype(np.float32),
+            ]
+        ).astype(np.float32)
 
     def step(self, action):
         action = np.asarray(action, dtype=np.float32)

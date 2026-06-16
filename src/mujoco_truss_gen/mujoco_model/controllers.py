@@ -8,6 +8,11 @@ from dataclasses import dataclass
 import mujoco
 import numpy as np
 
+from mujoco_truss_gen.mujoco_model.control_graph import (
+    ControlGraphMetadata,
+    control_graph_metadata_from_xml,
+)
+
 ANGLE_BISECTOR_ACTUATOR_PREFIX = "bisector_act_"
 ANGULAR_BISECTOR_ACTUATOR_PREFIX = "bisector_angular_act_"
 ROLL_BISECTOR_ACTUATOR_PREFIX = "bisector_roll_act_"
@@ -328,6 +333,11 @@ class NodeVelocityController:
         site_to_node: dict[str, str],
         external_actuator_ids: Iterable[int],
     ):
+        self.control_graph = control_graph_metadata_from_xml(xml)
+        if self.control_graph.enabled:
+            self._init_from_control_graph(model, external_actuator_ids, self.control_graph)
+            return
+
         self.node_names = list(node_names)
         self.node_index = {node_name: index for index, node_name in enumerate(self.node_names)}
 
@@ -366,7 +376,7 @@ class NodeVelocityController:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.route_node_paths and self.edges)
+        return bool((self.control_graph.enabled or self.route_node_paths) and self.edges)
 
     def transform(self, node_commands: np.ndarray) -> np.ndarray:
         node_commands = np.asarray(node_commands, dtype=float)
@@ -411,6 +421,36 @@ class NodeVelocityController:
             incidence[row, self.node_index[edge.from_node]] = -1.0
             incidence[row, self.node_index[edge.to_node]] = 1.0
         return incidence
+
+    def _init_from_control_graph(
+        self,
+        model: mujoco.MjModel,
+        external_actuator_ids: Iterable[int],
+        control_graph: ControlGraphMetadata,
+    ) -> None:
+        self.node_names = list(control_graph.control_node_names)
+        self.node_index = {node_name: index for index, node_name in enumerate(self.node_names)}
+        self.route_node_paths = []
+        passive_nodes = set(control_graph.passive_control_node_names)
+        self.passive_node_names = [
+            node_name for node_name in self.node_names if node_name in passive_nodes
+        ]
+        self.passive_node_mask = np.array(
+            [node_name in passive_nodes for node_name in self.node_names],
+            dtype=bool,
+        )
+        self.edges = _node_velocity_edges_from_control_graph(
+            model,
+            external_actuator_ids,
+            control_graph,
+            self.node_index,
+        )
+        self.edge_names = [edge.tendon_name for edge in self.edges]
+        self.actuator_ids = np.array([edge.actuator_id for edge in self.edges], dtype=int)
+        self.incidence_matrix = self._build_incidence_matrix()
+        self.latest_raw_node_commands = np.zeros(len(self.node_names), dtype=float)
+        self.latest_node_commands = np.zeros(len(self.node_names), dtype=float)
+        self.latest_edge_commands = np.zeros(len(self.edges), dtype=float)
 
 
 def angle_bisector_actuator_name(node_name: str) -> str:
@@ -517,6 +557,42 @@ def _node_velocity_edges(
                 actuator_id=int(actuator_id),
                 from_node=from_node,
                 to_node=to_node,
+            )
+        )
+    return edges
+
+
+def _node_velocity_edges_from_control_graph(
+    model: mujoco.MjModel,
+    external_actuator_ids: Iterable[int],
+    control_graph: ControlGraphMetadata,
+    node_index: dict[str, int],
+) -> list[NodeVelocityEdge]:
+    actuator_edge_by_tendon = {
+        actuator_edge.tendon: actuator_edge for actuator_edge in control_graph.actuator_edges
+    }
+    edges = []
+    for actuator_id in external_actuator_ids:
+        tendon_id = int(model.actuator_trnid[actuator_id, 0])
+        if tendon_id < 0:
+            continue
+
+        tendon_name = model.tendon(tendon_id).name
+        actuator_edge = actuator_edge_by_tendon.get(tendon_name)
+        if actuator_edge is None:
+            continue
+        if (
+            actuator_edge.from_node not in node_index
+            or actuator_edge.to_node not in node_index
+        ):
+            continue
+
+        edges.append(
+            NodeVelocityEdge(
+                tendon_name=tendon_name,
+                actuator_id=int(actuator_id),
+                from_node=actuator_edge.from_node,
+                to_node=actuator_edge.to_node,
             )
         )
     return edges

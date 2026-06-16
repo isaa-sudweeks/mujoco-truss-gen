@@ -7,7 +7,7 @@ import numpy as np
 
 from mujoco_truss_gen.mujoco_model.model import ModelSource, MujocoModel
 
-GraphView = Literal["physical", "logical"]
+GraphView = Literal["physical", "logical", "control"]
 LogicalAggregation = Literal["mean", "connector_ball"]
 
 
@@ -20,13 +20,15 @@ def get_edge_index(source: ModelSource, *, graph_view: GraphView = "physical") -
         source: A MujocoModel, mujoco.MjSpec, or XML string/path.
         graph_view: ``"physical"`` preserves the model's compiled node bodies.
             ``"logical"`` collapses realistic cloned nodes back to their source nodes.
+            ``"control"`` returns the policy/control graph, including actuated and
+            virtual connector edges, when the model provides control metadata.
 
     Returns:
         np.ndarray: Integer array of shape (2, E) where E is the number of directed edges.
     """
     model = _coerce_model(source)
-    if graph_view not in ("physical", "logical"):
-        raise ValueError("graph_view must be 'physical' or 'logical'.")
+    if graph_view not in ("physical", "logical", "control"):
+        raise ValueError("graph_view must be 'physical', 'logical', or 'control'.")
 
     node_names = model.node_names
     edge_pairs = model.structural_edges
@@ -36,6 +38,8 @@ def get_edge_index(source: ModelSource, *, graph_view: GraphView = "physical") -
             (_logical_node_name(node_a), _logical_node_name(node_b))
             for node_a, node_b in model.structural_edges
         ]
+    elif graph_view == "control":
+        return _get_control_edge_index(model)
 
     edges = []
     for node_a, node_b in edge_pairs:
@@ -78,6 +82,8 @@ def get_node_features(
         source: A MujocoModel, mujoco.MjSpec, or XML string/path.
         graph_view: ``"physical"`` preserves the model's compiled node bodies.
             ``"logical"`` collapses realistic cloned nodes back to their source nodes.
+            ``"control"`` returns features for policy/control nodes. Abstract
+            duplicate control nodes may alias the same physical body.
         aggregation: Logical-node aggregation used only when ``graph_view="logical"``.
             ``"mean"`` averages cloned node bodies. ``"connector_ball"`` uses the
             matching connector ball body when present and falls back to the physical
@@ -87,13 +93,15 @@ def get_node_features(
         np.ndarray: Float array of shape (N, 6) where N is the number of nodes.
     """
     model = _coerce_model(source)
-    if graph_view not in ("physical", "logical"):
-        raise ValueError("graph_view must be 'physical' or 'logical'.")
+    if graph_view not in ("physical", "logical", "control"):
+        raise ValueError("graph_view must be 'physical', 'logical', or 'control'.")
     if aggregation not in ("mean", "connector_ball"):
         raise ValueError("aggregation must be 'mean' or 'connector_ball'.")
 
     if graph_view == "logical":
         return _get_logical_node_features(model, aggregation)
+    if graph_view == "control":
+        return _get_control_node_features(model)
 
     positions = model.get_node_position_matrix()
     velocities = model.get_node_linear_velocity_matrix()
@@ -108,10 +116,61 @@ def get_node_features(
     return node_features.astype(np.float32)
 
 
+def get_edge_types(source: ModelSource, *, graph_view: GraphView = "physical") -> np.ndarray:
+    """
+    Returns edge type labels aligned with ``get_edge_index`` columns.
+
+    For ``graph_view="control"``, each undirected control edge contributes two
+    directed edge-index columns and two matching type labels. Labels are either
+    ``"actuated"`` for physical tendon/tube message edges or ``"connector"`` for
+    virtual same-connector message edges. Other graph views return ``"structural"``
+    labels aligned with their directed structural edges.
+    """
+    model = _coerce_model(source)
+    if graph_view not in ("physical", "logical", "control"):
+        raise ValueError("graph_view must be 'physical', 'logical', or 'control'.")
+
+    if graph_view == "control":
+        edge_types = []
+        for edge in model.control_graph.edges:
+            edge_types.extend((edge.type, edge.type))
+        return np.array(edge_types, dtype=object)
+
+    edge_index = get_edge_index(model, graph_view=graph_view)
+    return np.full(edge_index.shape[1], "structural", dtype=object)
+
+
 def _coerce_model(source: ModelSource) -> MujocoModel:
     if isinstance(source, MujocoModel):
         return source
     return MujocoModel(source)
+
+
+def _get_control_edge_index(model: MujocoModel) -> np.ndarray:
+    node_names = model.control_graph.control_node_names
+    node_index = {node_name: index for index, node_name in enumerate(node_names)}
+    edges = []
+    for edge in model.control_graph.edges:
+        if edge.from_node not in node_index or edge.to_node not in node_index:
+            continue
+        from_index = node_index[edge.from_node]
+        to_index = node_index[edge.to_node]
+        if from_index == to_index:
+            continue
+        edges.append([from_index, to_index])
+        edges.append([to_index, from_index])
+
+    if not edges:
+        return np.empty((2, 0), dtype=np.int64)
+    return np.array(edges, dtype=np.int64).T
+
+
+def _get_control_node_features(model: MujocoModel) -> np.ndarray:
+    positions = model.get_control_node_position_matrix()
+    velocities = model.get_control_node_linear_velocity_matrix()
+    if positions.size == 0 or velocities.size == 0:
+        return np.empty((0, 6), dtype=np.float32)
+    return np.concatenate([positions, velocities], axis=1).astype(np.float32)
 
 
 def _logical_node_name(node_name: str) -> str:
