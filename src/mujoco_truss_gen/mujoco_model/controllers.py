@@ -49,10 +49,14 @@ class AngleBisectorController:
 
     def __init__(self, model: mujoco.MjModel, xml: str | None):
         self.targets = self._targets_from_xml(model, xml) if xml else []
+        self._previous_angles: dict[int, float] = {}
 
     @property
     def enabled(self) -> bool:
         return bool(self.targets)
+
+    def reset(self) -> None:
+        self._previous_angles.clear()
 
     def update(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         for target in self.targets:
@@ -97,6 +101,7 @@ class AngleBisectorController:
             if angle is None:
                 continue
 
+            angle = self._continuous_angle(target.actuator_id, angle)
             data.ctrl[target.actuator_id] = angle
 
             if target.angular_actuator_id is None or target.angular_hinge_axis is None:
@@ -120,6 +125,10 @@ class AngleBisectorController:
             if angular_angle is None:
                 continue
 
+            angular_angle = self._continuous_angle(
+                target.angular_actuator_id,
+                angular_angle,
+            )
             data.ctrl[target.angular_actuator_id] = angular_angle
 
             if (
@@ -150,10 +159,8 @@ class AngleBisectorController:
                 yawed_angular_axis,
                 angular_angle,
             )
-            if float(np.dot(rolled_normal, target_normal_parent)) < 0.0:
-                target_normal_parent = -target_normal_parent
-
-            roll_angle = _signed_angle_about_axis(
+            roll_angle = self._roll_angle(
+                target.roll_actuator_id,
                 rolled_normal,
                 target_normal_parent,
                 rolled_axis,
@@ -162,6 +169,41 @@ class AngleBisectorController:
                 continue
 
             data.ctrl[target.roll_actuator_id] = roll_angle
+
+    def _continuous_angle(self, actuator_id: int, angle: float) -> float:
+        previous = self._previous_angles.get(actuator_id)
+        if previous is not None:
+            angle = _nearest_equivalent_angle(angle, previous)
+        self._previous_angles[actuator_id] = angle
+        return angle
+
+    def _roll_angle(
+        self,
+        actuator_id: int,
+        from_vector: np.ndarray,
+        target_normal: np.ndarray,
+        axis: np.ndarray,
+    ) -> float | None:
+        previous = self._previous_angles.get(actuator_id)
+        if previous is None:
+            if float(np.dot(from_vector, target_normal)) < 0.0:
+                target_normal = -target_normal
+            angle = _signed_angle_about_axis(from_vector, target_normal, axis)
+            return None if angle is None else self._continuous_angle(actuator_id, angle)
+
+        candidates = []
+        for candidate_normal in (target_normal, -target_normal):
+            angle = _signed_angle_about_axis(from_vector, candidate_normal, axis)
+            if angle is None:
+                continue
+            angle = _nearest_equivalent_angle(angle, previous)
+            candidates.append(angle)
+        if not candidates:
+            return None
+
+        angle = min(candidates, key=lambda candidate: abs(candidate - previous))
+        self._previous_angles[actuator_id] = angle
+        return angle
 
     @classmethod
     def _targets_from_xml(
@@ -776,6 +818,10 @@ def _signed_angle_about_axis(
     signed_cross = float(np.dot(axis_unit, cross))
     dot = float(np.clip(np.dot(from_unit, to_unit), -1.0, 1.0))
     return math.atan2(signed_cross, dot)
+
+
+def _nearest_equivalent_angle(angle: float, reference: float) -> float:
+    return reference + math.remainder(angle - reference, 2.0 * math.pi)
 
 
 def _rotate_about_axis(vector: np.ndarray, axis: np.ndarray, angle: float) -> np.ndarray:
