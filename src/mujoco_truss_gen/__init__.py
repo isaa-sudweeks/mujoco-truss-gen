@@ -22,6 +22,7 @@ from mujoco_truss_gen.mujoco_model import (
     get_edge_types,
     get_icosahedron_definition,
     get_mujoco_spec,
+    get_networkx_graph,
     get_node_features,
     get_octahedron_definition,
     get_perimeter,
@@ -30,6 +31,7 @@ from mujoco_truss_gen.mujoco_model import (
     get_usevitch_graph_definition,
     save_xml,
     view,
+    view_graph,
     view_node_velocity,
     view_node_velocity_terminal,
 )
@@ -59,6 +61,7 @@ __all__ = [
     "build_world",
     "get_edge_index",
     "get_edge_types",
+    "get_networkx_graph",
     "get_icosahedron_definition",
     "get_mujoco_spec",
     "get_node_features",
@@ -70,6 +73,7 @@ __all__ = [
     "save_xml",
     "stl_to_shape_dict",
     "view",
+    "view_graph",
     "view_node_velocity",
     "view_node_velocity_terminal",
 ]

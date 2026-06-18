@@ -25,11 +25,13 @@ from mujoco_truss_gen import (
     get_edge_types,
     get_icosahedron_definition,
     get_mujoco_spec,
+    get_networkx_graph,
     get_node_features,
     get_preset_definition,
     get_route_lengths,
     get_usevitch_graph_definition,
     save_xml,
+    view_graph,
 )
 from mujoco_truss_gen.mujoco_model import presets as preset_module
 from mujoco_truss_gen.mujoco_model.constants import (
@@ -1884,6 +1886,37 @@ def test_control_graph_gnn_edges_include_connector_edge_types() -> None:
     }
     assert ("node_1", "node_1_route_path_2_2") in connector_pairs
     assert ("node_4", "node_4_route_path_2_3") in connector_pairs
+
+
+def test_get_networkx_graph_returns_named_control_graph_with_edge_types() -> None:
+    graph = get_networkx_graph(get_mujoco_spec("tetrahedron", realistic=True))
+
+    assert "node_1" in graph.nodes
+    assert "node_1_route_path_2_2" in graph.nodes
+    edge_types = {edge_data["type"] for _, _, edge_data in graph.edges(data=True)}
+    assert edge_types == {"actuated", "connector"}
+    assert graph.has_edge("node_1", "node_1_route_path_2_2")
+
+
+def test_view_graph_renders_without_showing_window() -> None:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    fig, ax, graph = view_graph(
+        get_mujoco_spec("octahedron", realistic=False),
+        graph_view="control",
+        layout="physical",
+        show=False,
+    )
+
+    try:
+        assert graph.number_of_nodes() == 12
+        assert ax.get_title() == "Control graph"
+        assert fig.axes == [ax]
+    finally:
+        plt.close(fig)
 
 
 def test_triangle_node_velocity_controller_uses_actuator_edges_only() -> None:
