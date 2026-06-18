@@ -48,13 +48,21 @@ Issues = "https://github.com/isaa-sudweeks/mujoco-truss-gen/issues"
 [project.optional-dependencies]
 dev = [
     "build>=1.2",
+    "matplotlib>=3.7",
+    "networkx>=3.0",
     "mypy>=1.8",
     "pytest>=8.0",
     "ruff>=0.4",
     "twine>=5.0",
 ]
 test = [
+    "matplotlib>=3.7",
+    "networkx>=3.0",
     "pytest>=8.0",
+]
+graph = [
+    "matplotlib>=3.7",
+    "networkx>=3.0",
 ]
 mesh = [
     "matplotlib>=3.7",

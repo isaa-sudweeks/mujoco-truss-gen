@@ -158,8 +158,8 @@ def get_networkx_graph(
         import networkx as nx
     except ImportError as exc:
         raise ImportError(
-            "get_networkx_graph() requires networkx. Install networkx to visualize "
-            "GNN graph structures."
+            "get_networkx_graph() requires networkx. Install it with: "
+            'pip install "mujoco-truss-gen[graph]"'
         ) from exc
 
     model = _coerce_model(source)
@@ -222,8 +222,8 @@ def view_graph(
         from matplotlib.lines import Line2D
     except ImportError as exc:
         raise ImportError(
-            "view_graph() requires matplotlib and networkx. Install both packages "
-            "to visualize GNN graph structures."
+            "view_graph() requires matplotlib and networkx. Install them with: "
+            'pip install "mujoco-truss-gen[graph]"'
         ) from exc
 
     graph = get_networkx_graph(

@@ -4,6 +4,13 @@ The package can extract node features and edge indices directly from a generated
 spec or model. The returned arrays are formatted for use with PyTorch Geometric
 `torch_geometric.data.Data` objects.
 
+Install the optional graph dependencies before using the NetworkX and Matplotlib
+helpers:
+
+```bash
+python -m pip install "mujoco-truss-gen[graph]"
+```
+
 ```python
 import torch
 
