@@ -34,3 +34,34 @@ node_features = get_node_features(
     aggregation="connector_ball",  # or "mean"
 )
 ```
+
+Use `view_graph` to inspect the graph structure passed to a GNN:
+
+```python
+from mujoco_truss_gen import get_mujoco_spec, view_graph
+
+spec = get_mujoco_spec("octahedron", realistic=True)
+
+# Shows action/control nodes, actuated edges, and virtual connector edges.
+fig, ax, graph = view_graph(spec, graph_view="control")
+```
+
+For custom plotting, build the NetworkX graph directly:
+
+```python
+import networkx as nx
+import matplotlib.pyplot as plt
+
+from mujoco_truss_gen import get_mujoco_spec, get_networkx_graph
+
+spec = get_mujoco_spec("tetrahedron", realistic=True)
+graph = get_networkx_graph(spec, graph_view="control")
+
+plt.figure(figsize=(8, 8))
+nx.draw(graph, with_labels=True)
+plt.show()
+```
+
+`graph_view="control"` preserves edge types in the NetworkX edge attribute
+`type`: `actuated` edges map to tendon commands, while `connector` edges are
+message-passing-only virtual edges between control nodes that share a connector.

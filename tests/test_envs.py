@@ -22,13 +22,16 @@ from mujoco_truss_gen import (
     TrussEnvConfig,
     TrussPhysicalParameters,
     get_edge_index,
+    get_edge_types,
     get_icosahedron_definition,
     get_mujoco_spec,
+    get_networkx_graph,
     get_node_features,
     get_preset_definition,
     get_route_lengths,
     get_usevitch_graph_definition,
     save_xml,
+    view_graph,
 )
 from mujoco_truss_gen.mujoco_model import presets as preset_module
 from mujoco_truss_gen.mujoco_model.constants import (
@@ -1771,6 +1774,212 @@ def test_node_velocity_command_env_steps_with_node_actions() -> None:
         np.testing.assert_allclose(env.mj_model.get_external_ctrl(), [0.01, -0.01])
     finally:
         env.close()
+
+
+def test_triangle_control_graph_matches_between_abstract_and_realistic_models() -> None:
+    abstract_model = MujocoModel(get_mujoco_spec("octahedron", realistic=False))
+    realistic_model = MujocoModel(get_mujoco_spec("octahedron", realistic=True))
+
+    assert abstract_model.control_graph.control_node_names == (
+        realistic_model.control_graph.control_node_names
+    )
+    assert [
+        (edge.from_node, edge.to_node, edge.type)
+        for edge in abstract_model.control_graph.edges
+    ] == [
+        (edge.from_node, edge.to_node, edge.type)
+        for edge in realistic_model.control_graph.edges
+    ]
+    assert abstract_model.control_graph.passive_control_node_names == (
+        realistic_model.control_graph.passive_control_node_names
+    )
+    assert [
+        (edge.from_node, edge.to_node)
+        for edge in abstract_model.control_graph.actuator_edges
+    ] == [
+        (edge.from_node, edge.to_node)
+        for edge in realistic_model.control_graph.actuator_edges
+    ]
+
+    abstract_env = MujocoNodeVelocityCommandEnv(
+        TrussEnvConfig(get_mujoco_spec("octahedron", realistic=False), max_steps=1)
+    )
+    realistic_env = MujocoNodeVelocityCommandEnv(
+        TrussEnvConfig(get_mujoco_spec("octahedron", realistic=True), max_steps=1)
+    )
+    try:
+        assert abstract_env.action_space.shape == realistic_env.action_space.shape
+        assert abstract_env.observation_space.shape == realistic_env.observation_space.shape
+    finally:
+        abstract_env.close()
+        realistic_env.close()
+
+
+def test_routed_control_graph_matches_between_abstract_and_realistic_models() -> None:
+    abstract_model = MujocoModel(get_mujoco_spec("tetrahedron", realistic=False))
+    realistic_model = MujocoModel(get_mujoco_spec("tetrahedron", realistic=True))
+
+    assert abstract_model.control_graph.control_node_names == (
+        realistic_model.control_graph.control_node_names
+    )
+    assert [
+        (edge.from_node, edge.to_node, edge.type)
+        for edge in abstract_model.control_graph.edges
+    ] == [
+        (edge.from_node, edge.to_node, edge.type)
+        for edge in realistic_model.control_graph.edges
+    ]
+    assert abstract_model.control_graph.passive_control_node_names == (
+        realistic_model.control_graph.passive_control_node_names
+    )
+    assert [
+        (edge.from_node, edge.to_node)
+        for edge in abstract_model.control_graph.actuator_edges
+    ] == [
+        (edge.from_node, edge.to_node)
+        for edge in realistic_model.control_graph.actuator_edges
+    ]
+
+
+def test_control_graph_maps_abstract_duplicates_to_shared_physical_nodes() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [0.8, 0.0, 0.2],
+        "node_3": [0.4, 0.7, 0.2],
+        "node_4": [0.4, -0.7, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+        "triangle_2": ["node_1", "node_4", "node_2", "node_1"],
+    }
+    abstract_model = MujocoModel(get_mujoco_spec(node_dict, triangle_dict, realistic=False))
+    realistic_model = MujocoModel(get_mujoco_spec(node_dict, triangle_dict, realistic=True))
+
+    assert abstract_model.control_graph.control_node_to_physical_node["node_1"] == "node_1"
+    assert (
+        abstract_model.control_graph.control_node_to_physical_node["node_1_tri_triangle_2"]
+        == "node_1"
+    )
+    assert realistic_model.control_graph.control_node_to_physical_node["node_1"] == "node_1"
+    assert (
+        realistic_model.control_graph.control_node_to_physical_node["node_1_tri_triangle_2"]
+        == "node_1_tri_triangle_2"
+    )
+
+    abstract_features = get_node_features(abstract_model, graph_view="control")
+    np.testing.assert_allclose(abstract_features[0], abstract_features[3])
+
+
+def test_control_graph_gnn_edges_include_connector_edge_types() -> None:
+    model = MujocoModel(get_mujoco_spec("tetrahedron", realistic=True))
+
+    edge_index = get_edge_index(model, graph_view="control")
+    edge_types = get_edge_types(model, graph_view="control")
+
+    assert edge_index.shape[1] == len(edge_types)
+    assert {"actuated", "connector"} == set(edge_types.tolist())
+
+    connector_pairs = {
+        (edge.from_node, edge.to_node)
+        for edge in model.control_graph.edges
+        if edge.type == "connector"
+    }
+    assert ("node_1", "node_1_route_path_2_2") in connector_pairs
+    assert ("node_4", "node_4_route_path_2_3") in connector_pairs
+
+
+def test_get_networkx_graph_returns_named_control_graph_with_edge_types() -> None:
+    graph = get_networkx_graph(get_mujoco_spec("tetrahedron", realistic=True))
+
+    assert "node_1" in graph.nodes
+    assert "node_1_route_path_2_2" in graph.nodes
+    edge_types = {edge_data["type"] for _, _, edge_data in graph.edges(data=True)}
+    assert edge_types == {"actuated", "connector"}
+    assert graph.has_edge("node_1", "node_1_route_path_2_2")
+
+
+def test_view_graph_renders_without_showing_window() -> None:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    fig, ax, graph = view_graph(
+        get_mujoco_spec("octahedron", realistic=False),
+        graph_view="control",
+        layout="physical",
+        show=False,
+    )
+
+    try:
+        assert graph.number_of_nodes() == 12
+        assert ax.get_title() == "Control graph"
+        assert fig.axes == [ax]
+    finally:
+        plt.close(fig)
+
+
+def test_triangle_node_velocity_controller_uses_actuator_edges_only() -> None:
+    node_dict = {
+        "node_1": [0.0, 0.0, 0.2],
+        "node_2": [1.0, 0.0, 0.2],
+        "node_3": [0.5, 0.8, 0.2],
+    }
+    triangle_dict = {
+        "triangle_1": ["node_1", "node_2", "node_3", "node_1"],
+    }
+    model = MujocoModel(get_mujoco_spec(node_dict, triangle_dict, realistic=False))
+    controller = NodeVelocityController(
+        model.model,
+        model.xml,
+        model.node_names,
+        model.site_to_node,
+        model.external_actuator_ids,
+    )
+
+    assert controller.node_names == ["node_1", "node_2", "node_3"]
+    assert controller.passive_node_names == ["node_1"]
+    assert len(controller.edges) == len(model.control_graph.actuator_edges)
+    assert len(controller.edges) < len(model.control_graph.edges)
+    np.testing.assert_allclose(
+        controller.incidence_matrix,
+        np.array([[-1.0, 1.0, 0.0], [1.0, 0.0, -1.0]]),
+    )
+
+    edge_commands = controller.transform(np.array([1.0, 2.0, 3.0]))
+
+    np.testing.assert_allclose(controller.latest_node_commands, [0.0, 2.0, 3.0])
+    np.testing.assert_allclose(edge_commands, [2.0, -3.0])
+
+
+def test_node_velocity_command_env_supports_triangle_and_routed_control_graphs() -> None:
+    for preset_name in ("octahedron", "tetrahedron"):
+        abstract_env = MujocoNodeVelocityCommandEnv(
+            TrussEnvConfig(get_mujoco_spec(preset_name, realistic=False), max_steps=2)
+        )
+        realistic_env = MujocoNodeVelocityCommandEnv(
+            TrussEnvConfig(get_mujoco_spec(preset_name, realistic=True), max_steps=2)
+        )
+        try:
+            abstract_obs, _ = abstract_env.reset(seed=13)
+            realistic_obs, _ = realistic_env.reset(seed=13)
+            assert abstract_env.action_space.shape == realistic_env.action_space.shape
+            assert abstract_env.observation_space.shape == realistic_env.observation_space.shape
+            assert abstract_env.observation_space.contains(abstract_obs)
+            assert realistic_env.observation_space.contains(realistic_obs)
+
+            abstract_action = np.zeros(abstract_env.action_space.shape, dtype=np.float32)
+            realistic_action = np.zeros(realistic_env.action_space.shape, dtype=np.float32)
+            abstract_obs, _, _, _, abstract_info = abstract_env.step(abstract_action)
+            realistic_obs, _, _, _, realistic_info = realistic_env.step(realistic_action)
+
+            assert abstract_env.observation_space.contains(abstract_obs)
+            assert realistic_env.observation_space.contains(realistic_obs)
+            assert "critical_eig" in abstract_info
+            assert "critical_eig" in realistic_info
+        finally:
+            abstract_env.close()
+            realistic_env.close()
 
 
 def test_node_velocity_viewer_state_tracks_sliders_and_tendon_readouts() -> None:

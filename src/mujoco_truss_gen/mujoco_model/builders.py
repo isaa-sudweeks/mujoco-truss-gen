@@ -22,6 +22,14 @@ from mujoco_truss_gen.mujoco_model.constants import (
 from mujoco_truss_gen.mujoco_model.constraints import (
     add_perimeter_constraint,
 )
+from mujoco_truss_gen.mujoco_model.control_graph import (
+    ControlGraphActuatorEdge,
+    ControlGraphEdge,
+    ControlGraphMetadata,
+    add_control_graph_metadata,
+    connector_edges_for_logical_nodes,
+    unique_control_edges,
+)
 from mujoco_truss_gen.mujoco_model.model_types import (
     EdgeTendonMap,
     NodeDict,
@@ -502,6 +510,7 @@ def build_triangle(
     _validate_triangle_dict(node_dict, triangle_dict)
     node_dict = _copy_node_dict(node_dict)
     triangle_dict = _copy_triangle_dict(triangle_dict)
+    control_graph = _triangle_control_graph_metadata(triangle_dict, realistic=realistic)
 
     if realistic:
         original_node_dict, node_instances, center, scale = clone_shared_nodes(
@@ -540,9 +549,11 @@ def build_triangle(
             physical_params=params,
         )
         build_abstract_triangle(spec, node_dict, triangle_dict, physical_params=params)
+        add_control_graph_metadata(spec, control_graph)
         return
 
     build_realistic_triangle(spec, triangle_dict, physical_params=params)
+    add_control_graph_metadata(spec, control_graph)
 
 
 def build_shapes(
@@ -558,6 +569,7 @@ def build_shapes(
     node_dict = _copy_node_dict(node_dict)
     shape_dict = _copy_shape_dict(shape_dict)
     _validate_shape_dict(node_dict, shape_dict)
+    control_graph = _shape_control_graph_metadata(shape_dict, realistic=realistic)
 
     if realistic:
         original_node_dict, node_instances, center, scale, hinge_axes = clone_routed_nodes(
@@ -578,10 +590,164 @@ def build_shapes(
             hinge_axes,
             physical_params=params,
         )
+        add_control_graph_metadata(spec, control_graph)
         return
 
     _lift_nodes_above_ground(node_dict, params)
     build_abstract_shapes(spec, node_dict, shape_dict, physical_params=params)
+    add_control_graph_metadata(spec, control_graph)
+
+
+def _triangle_control_graph_metadata(
+    triangle_dict: TriangleDict,
+    *,
+    realistic: bool,
+) -> ControlGraphMetadata:
+    control_node_names: list[str] = []
+    control_node_to_logical_node: dict[str, str] = {}
+    control_triangles: dict[str, list[str]] = {}
+    node_owner: dict[str, str] = {}
+
+    for triangle_name, triangle_nodes in triangle_dict.items():
+        control_nodes = []
+        for logical_node in triangle_nodes[:3]:
+            if logical_node not in node_owner:
+                node_owner[logical_node] = triangle_name
+                control_node = logical_node
+            else:
+                control_node = f"{logical_node}_tri_{triangle_name}"
+
+            control_node_names.append(control_node)
+            control_node_to_logical_node[control_node] = logical_node
+            control_nodes.append(control_node)
+        control_triangles[triangle_name] = control_nodes
+
+    control_node_to_physical_node = {
+        control_node: control_node if realistic else logical_node
+        for control_node, logical_node in control_node_to_logical_node.items()
+    }
+
+    edges: list[ControlGraphEdge] = []
+    actuator_edges: list[ControlGraphActuatorEdge] = []
+    passive_control_node_names = []
+
+    for triangle_name, triangle_nodes in triangle_dict.items():
+        control_nodes = control_triangles[triangle_name]
+        passive_index = list(triangle_nodes[:3]).index(triangle_nodes[3])
+        passive_control_node = control_nodes[passive_index]
+        passive_control_node_names.append(passive_control_node)
+
+        for index, from_node in enumerate(control_nodes):
+            to_node = control_nodes[(index + 1) % 3]
+            edges.append(ControlGraphEdge(from_node=from_node, to_node=to_node, type="actuated"))
+
+        for index, from_node in enumerate(control_nodes):
+            to_node = control_nodes[(index + 1) % 3]
+            if from_node != passive_control_node and to_node != passive_control_node:
+                continue
+
+            physical_from = control_node_to_physical_node[from_node]
+            physical_to = control_node_to_physical_node[to_node]
+            actuator_edges.append(
+                ControlGraphActuatorEdge(
+                    from_node=from_node,
+                    to_node=to_node,
+                    tendon=f"tendon_{physical_from}_{physical_to}",
+                )
+            )
+
+    edges.extend(
+        connector_edges_for_logical_nodes(control_node_names, control_node_to_logical_node)
+    )
+
+    return ControlGraphMetadata(
+        control_node_names=control_node_names,
+        control_node_to_physical_node=control_node_to_physical_node,
+        control_node_to_logical_node=control_node_to_logical_node,
+        edges=unique_control_edges(edges),
+        actuator_edges=actuator_edges,
+        passive_control_node_names=_unique_in_control_order(
+            passive_control_node_names,
+            control_node_names,
+        ),
+    )
+
+
+def _shape_control_graph_metadata(
+    shape_dict: ShapeDict,
+    *,
+    realistic: bool,
+) -> ControlGraphMetadata:
+    control_node_names: list[str] = []
+    control_node_to_logical_node: dict[str, str] = {}
+    control_routes: dict[str, list[str]] = {}
+    node_owner: dict[str, str] = {}
+
+    for shape_name, shape in shape_dict.items():
+        control_route = []
+        for index, logical_node in enumerate(shape["route"]):
+            if logical_node not in node_owner:
+                node_owner[logical_node] = f"{shape_name}_{index}"
+                control_node = logical_node
+            else:
+                control_node = f"{logical_node}_route_{shape_name}_{index}"
+
+            control_node_names.append(control_node)
+            control_node_to_logical_node[control_node] = logical_node
+            control_route.append(control_node)
+        control_routes[shape_name] = control_route
+
+    control_node_to_physical_node = {
+        control_node: control_node if realistic else logical_node
+        for control_node, logical_node in control_node_to_logical_node.items()
+    }
+
+    edges: list[ControlGraphEdge] = []
+    actuator_edges: list[ControlGraphActuatorEdge] = []
+    passive_control_node_names = []
+    tendon_by_physical_key: dict[tuple[str, str], str] = {}
+
+    for control_route in control_routes.values():
+        passive_control_node_names.extend((control_route[0], control_route[-1]))
+
+        for from_node, to_node in zip(control_route, control_route[1:], strict=False):
+            edges.append(ControlGraphEdge(from_node=from_node, to_node=to_node, type="actuated"))
+            physical_from = control_node_to_physical_node[from_node]
+            physical_to = control_node_to_physical_node[to_node]
+            key = edge_key(physical_from, physical_to)
+            if key not in tendon_by_physical_key:
+                tendon_by_physical_key[key] = f"tendon_{physical_from}_{physical_to}"
+                actuator_edges.append(
+                    ControlGraphActuatorEdge(
+                        from_node=from_node,
+                        to_node=to_node,
+                        tendon=tendon_by_physical_key[key],
+                    )
+                )
+
+    edges.extend(
+        connector_edges_for_logical_nodes(control_node_names, control_node_to_logical_node)
+    )
+
+    return ControlGraphMetadata(
+        control_node_names=control_node_names,
+        control_node_to_physical_node=control_node_to_physical_node,
+        control_node_to_logical_node=control_node_to_logical_node,
+        edges=unique_control_edges(edges),
+        actuator_edges=actuator_edges,
+        passive_control_node_names=_unique_in_control_order(
+            passive_control_node_names,
+            control_node_names,
+        ),
+    )
+
+
+def _unique_in_control_order(
+    node_names: list[str],
+    control_node_names: list[str],
+) -> list[str]:
+    selected = set(node_names)
+    return [node_name for node_name in control_node_names if node_name in selected]
 
 
 def _copy_node_dict(node_dict: NodeDict) -> NodeDict:
