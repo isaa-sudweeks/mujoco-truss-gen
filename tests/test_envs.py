@@ -621,6 +621,14 @@ def test_scaled_abstract_preset_keeps_control_values_unscaled() -> None:
     np.testing.assert_allclose(_xml_vector(actuator.get("actrange", "")), [0.0, 3.0])
 
 
+def test_scaled_realistic_preset_scales_edge_tendon_upper_range() -> None:
+    root = ET.fromstring(get_mujoco_spec("octahedron", scale=2.5, realistic=True).to_xml())
+
+    tendon = root.find(".//tendon/spatial[@name='tendon_node_1_node_2']")
+    assert tendon is not None
+    np.testing.assert_allclose(_xml_vector(tendon.get("range", "")), [0.5, 5.0])
+
+
 def test_env_domain_randomization_model_factory_rebuilds_on_reset() -> None:
     calls = []
 

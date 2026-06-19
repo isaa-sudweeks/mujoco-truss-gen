@@ -290,6 +290,7 @@ def build_realistic_triangle(
     spec: mujoco.MjSpec,
     triangle_dict: TriangleDict,
     *,
+    node_dict: NodeDict | None = None,
     physical_params: TrussPhysicalParameters | None = None,
 ) -> None:
     params = physical_params or TrussPhysicalParameters()
@@ -303,11 +304,21 @@ def build_realistic_triangle(
 
         for index, from_node in enumerate(nodes):
             to_node = nodes[(index + 1) % 3]
+            edge_length = (
+                _distance_between_nodes(node_dict, from_node, to_node)
+                if node_dict is not None
+                else None
+            )
             add_edge_tendon(
                 spec,
                 edge_tendons,
                 from_node,
                 to_node,
+                tendon_range=(
+                    _upper_scaled_tendon_range(edge_length, params)
+                    if edge_length is not None
+                    else None
+                ),
                 physical_params=params,
             )
 
@@ -357,11 +368,7 @@ def build_abstract_shapes(
                 edge_tendons,
                 from_node,
                 to_node,
-                tendon_range=(
-                    _scaled_tendon_range(edge_length, params)
-                    if scale_limits_to_geometry
-                    else None
-                ),
+                tendon_range=_upper_scaled_tendon_range(edge_length, params),
                 physical_params=params,
             )
             if tendon_name in actuated_tendons:
@@ -385,11 +392,7 @@ def build_abstract_shapes(
             spec,
             shape_name,
             route,
-            tendon_range=(
-                _scaled_tendon_range(_route_length(node_dict, route), params)
-                if scale_limits_to_geometry
-                else None
-            ),
+            tendon_range=_upper_scaled_route_tendon_range(_route_length(node_dict, route), params),
             physical_params=params,
         )
 
@@ -464,11 +467,13 @@ def build_realistic_shapes(
     for shape_name, shape in shape_dict.items():
         route = shape["route"]
         for from_node, to_node in zip(route, route[1:], strict=False):
+            edge_length = _distance_between_nodes(node_dict, from_node, to_node)
             tendon_name = add_edge_tendon(
                 spec,
                 edge_tendons,
                 from_node,
                 to_node,
+                tendon_range=_upper_scaled_tendon_range(edge_length, params),
                 physical_params=params,
             )
             if tendon_name in actuated_tendons:
@@ -483,7 +488,13 @@ def build_realistic_shapes(
             )
             actuated_tendons.add(tendon_name)
 
-        add_route_tendon(spec, shape_name, route, physical_params=params)
+        add_route_tendon(
+            spec,
+            shape_name,
+            route,
+            tendon_range=_upper_scaled_route_tendon_range(_route_length(node_dict, route), params),
+            physical_params=params,
+        )
 
 
 def _routed_passive_nodes(shape_dict: ShapeDict) -> set[str]:
@@ -552,7 +563,7 @@ def build_triangle(
         add_control_graph_metadata(spec, control_graph)
         return
 
-    build_realistic_triangle(spec, triangle_dict, physical_params=params)
+    build_realistic_triangle(spec, triangle_dict, node_dict=node_dict, physical_params=params)
     add_control_graph_metadata(spec, control_graph)
 
 
@@ -1047,18 +1058,6 @@ def _triangle_node_masses(
     return node_masses
 
 
-def _scaled_tendon_range(
-    length: float,
-    physical_params: TrussPhysicalParameters,
-) -> list[float]:
-    if length <= 0.0:
-        raise ValueError("Cannot scale tendon limits for a zero-length edge.")
-    return [
-        length * physical_params.tendon_range_min_factor,
-        length * physical_params.tendon_range_max_factor,
-    ]
-
-
 def _upper_scaled_tendon_range(
     length: float,
     physical_params: TrussPhysicalParameters,
@@ -1066,7 +1065,19 @@ def _upper_scaled_tendon_range(
     if length <= 0.0:
         raise ValueError("Cannot scale tendon limits for a zero-length edge.")
     return [
-        0.5,
+        physical_params.default_edge_tendon_range[0],
+        length * physical_params.tendon_range_max_factor,
+    ]
+
+
+def _upper_scaled_route_tendon_range(
+    length: float,
+    physical_params: TrussPhysicalParameters,
+) -> list[float]:
+    if length <= 0.0:
+        raise ValueError("Cannot scale tendon limits for a zero-length route.")
+    return [
+        physical_params.default_route_tendon_range[0],
         length * physical_params.tendon_range_max_factor,
     ]
 

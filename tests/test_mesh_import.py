@@ -109,10 +109,13 @@ def test_stl_import_scales_tendon_limits_to_imported_edge_lengths(
     node_dict, shape_dict = stl_to_shape_dict("scaled_triangle.stl")
     root = ET.fromstring(get_mujoco_spec(node_dict, shape_dict, realistic=False).to_xml())
 
-    assert _xml_float_pair(root, ".//tendon/spatial[@name='tendon_node_1_node_2']") == [2.0, 8.0]
-    assert _xml_float_pair(root, ".//tendon/spatial[@name='tendon_node_3_node_1']") == [1.5, 6.0]
-    assert _xml_float_pair(root, ".//tendon/spatial[@name='tendon_node_2_node_3']") == [2.5, 10.0]
-    assert _xml_float_pair(root, ".//tendon/spatial[@name='route_path_1']") == [6.0, 24.0]
+    assert _xml_float_pair(root, ".//tendon/spatial[@name='tendon_node_1_node_2']") == [0.5, 8.0]
+    assert _xml_float_pair(root, ".//tendon/spatial[@name='tendon_node_3_node_1']") == [0.5, 6.0]
+    assert _xml_float_pair(root, ".//tendon/spatial[@name='tendon_node_2_node_3']") == [
+        0.5,
+        10.0,
+    ]
+    assert _xml_float_pair(root, ".//tendon/spatial[@name='route_path_1']") == [0.5, 24.0]
 
     assert _xml_float_pair(root, ".//actuator/general[@name='act_12']", "actrange") == [
         0.0,
@@ -128,7 +131,7 @@ def test_stl_import_scales_tendon_limits_to_imported_edge_lengths(
     ]
 
 
-def test_hand_authored_routed_shape_keeps_default_tendon_limits() -> None:
+def test_hand_authored_routed_shape_scales_tendon_upper_limits() -> None:
     node_dict = {
         "node_1": [0.0, 0.0, 0.2],
         "node_2": [4.0, 0.0, 0.2],
@@ -143,8 +146,8 @@ def test_hand_authored_routed_shape_keeps_default_tendon_limits() -> None:
 
     root = ET.fromstring(get_mujoco_spec(node_dict, shape_dict, realistic=False).to_xml())
 
-    assert _xml_float_pair(root, ".//tendon/spatial[@name='tendon_node_1_node_2']") == [0.5, 2.0]
-    assert _xml_float_pair(root, ".//tendon/spatial[@name='route_path_1']") == [0.5, 10.0]
+    assert _xml_float_pair(root, ".//tendon/spatial[@name='tendon_node_1_node_2']") == [0.5, 8.0]
+    assert _xml_float_pair(root, ".//tendon/spatial[@name='route_path_1']") == [0.5, 18.0]
     assert _xml_float_pair(root, ".//actuator/general[@name='act_12']", "actrange") == [0.0, 3.0]
 
 
