@@ -10,6 +10,8 @@ import numpy as np
 import pytest
 
 from mujoco_truss_gen import (
+    HENNEBERG_PRESET_SPECS,
+    HENNEBERG_RIGIDITY_THRESHOLD,
     PRESETS,
     AccelerometerConfig,
     DomainRandomizationConfig,
@@ -23,6 +25,7 @@ from mujoco_truss_gen import (
     TrussPhysicalParameters,
     get_edge_index,
     get_edge_types,
+    get_henneberg_routed_graph_definition,
     get_icosahedron_definition,
     get_mujoco_spec,
     get_networkx_graph,
@@ -132,6 +135,114 @@ def test_usevitch_graph_presets_compile_and_match_partitions() -> None:
     nodes, triangles = get_usevitch_graph_definition(60243677150, partition_index=3)
     assert len(nodes) == 9
     assert len(triangles) == 7
+
+
+def test_henneberg_graph_generation_counts_match_reference() -> None:
+    graphs_by_node_count = preset_module._henneberg_graphs_by_node_count(8)
+
+    assert {node_count: len(graphs) for node_count, graphs in graphs_by_node_count.items()} == {
+        4: 1,
+        5: 1,
+        6: 4,
+        7: 26,
+        8: 374,
+    }
+
+    assert [
+        (
+            node_count,
+            len(graphs),
+            sum(preset_module._minimum_trail_count(graph) == 1 for graph in graphs),
+            sum(
+                graph.number_of_edges() % 2 == 0
+                and preset_module._minimum_trail_count(graph) == 2
+                for graph in graphs
+            ),
+            sum(
+                graph.number_of_edges() % 3 == 0
+                and preset_module._minimum_trail_count(graph) == 3
+                for graph in graphs
+            ),
+        )
+        for node_count, graphs in graphs_by_node_count.items()
+        if node_count >= 5
+    ] == [
+        (5, 1, 1, 0, 0),
+        (6, 4, 2, 1, 1),
+        (7, 26, 10, 0, 3),
+        (8, 374, 85, 190, 89),
+    ]
+
+
+def test_henneberg_routed_graph_presets_are_rigid_equal_route_covers() -> None:
+    expected_presets = {
+        f"henneberg_n{node_count}_{tube_count}tube"
+        for node_count, tube_count in HENNEBERG_PRESET_SPECS
+    }
+    assert expected_presets <= set(PRESETS)
+
+    for node_count, tube_count in HENNEBERG_PRESET_SPECS:
+        preset_name = f"henneberg_n{node_count}_{tube_count}tube"
+        node_dict, shape_dict = get_preset_definition(preset_name)
+        direct_nodes, direct_shapes = get_henneberg_routed_graph_definition(
+            node_count,
+            tube_count,
+        )
+        scaled_nodes, scaled_shapes = get_preset_definition(preset_name, scale=2.5)
+
+        assert node_dict == direct_nodes
+        assert shape_dict == direct_shapes
+        assert scaled_shapes == shape_dict
+        for node_name, position in node_dict.items():
+            np.testing.assert_allclose(scaled_nodes[node_name], np.asarray(position) * 2.5)
+
+        assert len(node_dict) == node_count
+        assert len(shape_dict) == tube_count
+        route_lengths = [len(shape["route"]) - 1 for shape in shape_dict.values()]
+        if tube_count > 1:
+            assert len(set(route_lengths)) == 1
+
+        route_edges = []
+        for shape in shape_dict.values():
+            route = shape["route"]
+            assert shape["active_edges"] == [
+                [from_node, to_node]
+                for from_node, to_node in zip(route, route[1:], strict=False)
+            ]
+            for from_node, to_node in zip(route, route[1:], strict=False):
+                from_index = int(from_node.removeprefix("node_")) - 1
+                to_index = int(to_node.removeprefix("node_")) - 1
+                route_edges.append(tuple(sorted((from_index, to_index))))
+
+        assert len(route_edges) == 3 * node_count - 6
+        assert len(set(route_edges)) == len(route_edges)
+
+        coordinates = np.array(
+            [node_dict[f"node_{index}"] for index in range(1, node_count + 1)],
+            dtype=float,
+        )
+        assert np.all(np.isfinite(coordinates))
+        edge_lengths = preset_module._edge_lengths(coordinates, tuple(sorted(route_edges)))
+        assert np.min(edge_lengths) > 1e-8
+        assert np.mean(edge_lengths) == pytest.approx(1.0)
+
+        wcri = preset_module._worst_case_rigidity_index(coordinates, tuple(sorted(route_edges)))
+        rank = preset_module._rigidity_matrix_rank(coordinates, tuple(sorted(route_edges)))
+        assert wcri > HENNEBERG_RIGIDITY_THRESHOLD
+        assert rank == 3 * node_count - 6
+
+        get_mujoco_spec(preset_name, realistic=False).compile()
+
+
+def test_henneberg_preset_definitions_are_deep_copied() -> None:
+    _, mutated_shapes = get_preset_definition("henneberg_n6_2tube")
+    mutated_shapes["path_1"]["route"][0] = "mutated"
+    mutated_shapes["path_1"]["active_edges"][0][0] = "mutated"
+
+    _, fresh_shapes = get_preset_definition("henneberg_n6_2tube")
+
+    assert fresh_shapes["path_1"]["route"][0] != "mutated"
+    assert fresh_shapes["path_1"]["active_edges"][0][0] != "mutated"
 
 
 def test_usevitch_embedding_distance_matrix_matches_paper_algorithm() -> None:

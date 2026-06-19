@@ -8,6 +8,8 @@ from mujoco_truss_gen.base_env import (
 from mujoco_truss_gen.mesh_import import stl_to_shape_dict
 from mujoco_truss_gen.mujoco_model import (
     DEFAULT_ACCELEROMETER_CONFIG,
+    HENNEBERG_PRESET_SPECS,
+    HENNEBERG_RIGIDITY_THRESHOLD,
     PRESETS,
     USEVITCH_GRAPH_LABELS,
     AccelerometerConfig,
@@ -20,6 +22,7 @@ from mujoco_truss_gen.mujoco_model import (
     build_world,
     get_edge_index,
     get_edge_types,
+    get_henneberg_routed_graph_definition,
     get_icosahedron_definition,
     get_mujoco_spec,
     get_networkx_graph,
@@ -51,6 +54,8 @@ __all__ = [
     "MujocoVelocityCommandEnv",
     "NodeVelocityController",
     "PRESETS",
+    "HENNEBERG_PRESET_SPECS",
+    "HENNEBERG_RIGIDITY_THRESHOLD",
     "TrussEnvConfig",
     "TrussPhysicalParameters",
     "USEVITCH_GRAPH_LABELS",
@@ -62,6 +67,7 @@ __all__ = [
     "get_edge_index",
     "get_edge_types",
     "get_networkx_graph",
+    "get_henneberg_routed_graph_definition",
     "get_icosahedron_definition",
     "get_mujoco_spec",
     "get_node_features",

@@ -131,6 +131,21 @@ caller.
   the largest worst case rigidity index; when candidates have nearly identical
   rigidity index values, the tie-breaker is the smaller RMS error from unit
   structural edge lengths.
+- `get_henneberg_routed_graph_definition(node_count, tube_count, scale=1.0)`
+  returns a curated routed continuous-tendon graph generated from Henneberg H1
+  and H2 moves starting at `K4`. Named presets are
+  `henneberg_n5_1tube`, `henneberg_n6_1tube`, `henneberg_n6_2tube`,
+  `henneberg_n6_3tube`, `henneberg_n7_1tube`, `henneberg_n7_3tube`,
+  `henneberg_n8_1tube`, `henneberg_n8_2tube`, and `henneberg_n8_3tube`.
+  Henneberg candidates are filtered to minimally rigid edge counts
+  (`3 * nodes - 6`), deduplicated with NetworkX graph isomorphism checks, and
+  classified by the minimum number of trails required to cover every edge.
+  `2tube` and `3tube` presets use equal edge counts per routed tendon. Each
+  candidate embedding starts from `networkx.spring_layout(..., dim=3)`, is
+  refined against unit edge-length and separated non-edge targets, and is
+  accepted only if the selected coordinates pass an infinitesimal-rigidity
+  gate using the 3D rigidity matrix with worst case rigidity index greater than
+  `1e-4`.
 - `get_perimeter(node_dict, triangle_dict)` computes each triangle perimeter
   from the first three vertices.
 - `save_xml(spec, filename)` writes `spec.to_xml()` to disk and returns the

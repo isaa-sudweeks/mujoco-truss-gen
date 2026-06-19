@@ -31,8 +31,11 @@ from mujoco_truss_gen.mujoco_model.io_viewer import (
 )
 from mujoco_truss_gen.mujoco_model.model import MujocoModel
 from mujoco_truss_gen.mujoco_model.presets import (
+    HENNEBERG_PRESET_SPECS,
+    HENNEBERG_RIGIDITY_THRESHOLD,
     PRESETS,
     USEVITCH_GRAPH_LABELS,
+    get_henneberg_routed_graph_definition,
     get_icosahedron_definition,
     get_octahedron_definition,
     get_preset_definition,
@@ -50,6 +53,8 @@ __all__ = [
     "MujocoModel",
     "NodeVelocityController",
     "PRESETS",
+    "HENNEBERG_PRESET_SPECS",
+    "HENNEBERG_RIGIDITY_THRESHOLD",
     "TrussPhysicalParameters",
     "USEVITCH_GRAPH_LABELS",
     "build_abstract_shapes",
@@ -64,6 +69,7 @@ __all__ = [
     "get_edge_index",
     "get_edge_types",
     "get_networkx_graph",
+    "get_henneberg_routed_graph_definition",
     "get_icosahedron_definition",
     "get_mujoco_spec",
     "get_node_features",

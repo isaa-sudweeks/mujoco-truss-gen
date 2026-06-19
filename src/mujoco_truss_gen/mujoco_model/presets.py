@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from copy import deepcopy
 from functools import cache
 from itertools import combinations
 
+import networkx as nx
 import numpy as np
+from scipy.optimize import least_squares
 
 from mujoco_truss_gen.mujoco_model.model_types import NodeDict, ShapeDict, TriangleDict
 
@@ -183,6 +186,23 @@ USEVITCH_MDS_FALLBACK_DISTANCE_PARAMETER_SETS: tuple[tuple[float, float, float],
 USEVITCH_MDS_MAX_ITERATIONS = 300
 USEVITCH_MDS_TOLERANCE = 1e-9
 USEVITCH_WCRI_TIE_RELATIVE_TOLERANCE = 0.01
+
+HENNEBERG_PRESET_SPECS: tuple[tuple[int, int], ...] = (
+    (5, 1),
+    (6, 1),
+    (6, 2),
+    (6, 3),
+    (7, 1),
+    (7, 3),
+    (8, 1),
+    (8, 2),
+    (8, 3),
+)
+HENNEBERG_EMBEDDING_TRIALS = 24
+HENNEBERG_NONEDGE_DISTANCE = 1.6
+HENNEBERG_RIGIDITY_THRESHOLD = 1e-4
+HENNEBERG_LAYOUT_ITERATIONS = 250
+HENNEBERG_LAYOUT_REFINEMENT_EVALUATIONS = 400
 
 
 def get_usevitch_graph_definition(
@@ -507,18 +527,10 @@ def _worst_case_rigidity_index(
     coordinates: np.ndarray,
     edges: tuple[tuple[int, int], ...],
 ) -> float:
-    rows = []
-    for first, second in edges:
-        delta = coordinates[second] - coordinates[first]
-        row = np.zeros(coordinates.shape[0] * coordinates.shape[1], dtype=float)
-        row[first * coordinates.shape[1] : (first + 1) * coordinates.shape[1]] = -delta
-        row[second * coordinates.shape[1] : (second + 1) * coordinates.shape[1]] = delta
-        rows.append(row)
-
-    if not rows:
+    rigidity_matrix = _rigidity_matrix(coordinates, edges)
+    if rigidity_matrix.size == 0:
         return 0.0
 
-    rigidity_matrix = np.vstack(rows)
     gram = rigidity_matrix.T @ rigidity_matrix
     norm = np.trace(gram)
     if norm <= 0.0:
@@ -531,11 +543,381 @@ def _worst_case_rigidity_index(
     return float(max(eigenvalues[rigid_body_modes] / norm, 0.0))
 
 
+def _rigidity_matrix(
+    coordinates: np.ndarray,
+    edges: tuple[tuple[int, int], ...],
+) -> np.ndarray:
+    rows = []
+    dimensions = coordinates.shape[1]
+    for first, second in edges:
+        delta = coordinates[second] - coordinates[first]
+        row = np.zeros(coordinates.shape[0] * dimensions, dtype=float)
+        row[first * dimensions : (first + 1) * dimensions] = -delta
+        row[second * dimensions : (second + 1) * dimensions] = delta
+        rows.append(row)
+
+    if not rows:
+        return np.empty((0, coordinates.shape[0] * dimensions), dtype=float)
+    return np.vstack(rows)
+
+
+def _rigidity_matrix_rank(
+    coordinates: np.ndarray,
+    edges: tuple[tuple[int, int], ...],
+    tolerance: float = 1e-7,
+) -> int:
+    return int(np.linalg.matrix_rank(_rigidity_matrix(coordinates, edges), tol=tolerance))
+
+
 def _normalize_usevitch_embedding(coordinates: np.ndarray) -> np.ndarray:
     coordinates = coordinates - np.mean(coordinates, axis=0)
     coordinates[:, 2] -= np.min(coordinates[:, 2])
     coordinates[:, 2] += 0.1
     return coordinates
+
+
+def get_henneberg_routed_graph_definition(
+    node_count: int,
+    tube_count: int,
+    scale: float = 1.0,
+) -> tuple[NodeDict, ShapeDict]:
+    """Return a curated routed Henneberg graph preset.
+
+    H1/H2 candidate graphs are generated deterministically from ``K4``. The
+    selected graph must support the requested number of edge-disjoint routed
+    trails, and its selected 3D embedding must pass the same rigidity-matrix
+    style infinitesimal-rigidity gate used for Usevitch embeddings.
+    """
+    scale = _validate_scale(scale)
+    node_count = int(node_count)
+    tube_count = int(tube_count)
+    if (node_count, tube_count) not in HENNEBERG_PRESET_SPECS:
+        supported = ", ".join(
+            f"n{nodes}_{tubes}tube" for nodes, tubes in HENNEBERG_PRESET_SPECS
+        )
+        raise ValueError(
+            f"Unsupported Henneberg routed graph preset: "
+            f"node_count={node_count}, tube_count={tube_count}. "
+            f"Supported presets: {supported}"
+        )
+
+    coordinates, routes = _selected_henneberg_routed_graph(node_count, tube_count)
+    node_dict = {
+        f"node_{index + 1}": [float(coordinate) for coordinate in position]
+        for index, position in enumerate(coordinates)
+    }
+    shape_dict = {
+        f"path_{index}": _henneberg_route_shape(route)
+        for index, route in enumerate(routes, start=1)
+    }
+    return _scale_node_dict(node_dict, scale), shape_dict
+
+
+def _henneberg_route_shape(route: tuple[int, ...]) -> dict[str, list[list[str]] | list[str]]:
+    node_route = [f"node_{node + 1}" for node in route]
+    return {
+        "route": node_route,
+        "active_edges": [
+            [from_node, to_node]
+            for from_node, to_node in zip(node_route, node_route[1:], strict=False)
+        ],
+    }
+
+
+@cache
+def _selected_henneberg_routed_graph(
+    node_count: int,
+    tube_count: int,
+) -> tuple[np.ndarray, tuple[tuple[int, ...], ...]]:
+    for graph_index, graph in enumerate(_henneberg_graphs_by_node_count(node_count)[node_count]):
+        if _minimum_trail_count(graph) != tube_count:
+            continue
+        if graph.number_of_edges() % tube_count != 0:
+            continue
+
+        routes = _decompose_henneberg_routes(graph, tube_count)
+        if routes is None:
+            continue
+
+        embedding = _best_henneberg_embedding(graph, graph_index, tube_count)
+        edges = _sorted_graph_edges(graph)
+        if (
+            _worst_case_rigidity_index(embedding, edges) > HENNEBERG_RIGIDITY_THRESHOLD
+            and _rigidity_matrix_rank(embedding, edges) == 3 * node_count - 6
+        ):
+            return embedding, routes
+
+    raise ValueError(
+        f"No infinitesimally rigid Henneberg graph found for "
+        f"node_count={node_count}, tube_count={tube_count}."
+    )
+
+
+@cache
+def _henneberg_graphs_by_node_count(max_node_count: int) -> dict[int, list[nx.Graph]]:
+    max_node_count = int(max_node_count)
+    if max_node_count < 4:
+        raise ValueError("max_node_count must be at least 4.")
+
+    graphs_by_node_count: dict[int, list[nx.Graph]] = {4: [nx.complete_graph(4)]}
+    for node_count in range(5, max_node_count + 1):
+        candidates = []
+        for graph in graphs_by_node_count[node_count - 1]:
+            candidates.extend(_henneberg_h1_graphs(graph))
+            candidates.extend(_henneberg_h2_graphs(graph))
+
+        candidates = [
+            graph
+            for graph in candidates
+            if graph.number_of_edges() == 3 * graph.number_of_nodes() - 6
+        ]
+        graphs_by_node_count[node_count] = _unique_henneberg_graphs(candidates)
+
+    return graphs_by_node_count
+
+
+def _henneberg_h1_graphs(graph: nx.Graph) -> list[nx.Graph]:
+    new_node = graph.number_of_nodes()
+    graphs = []
+    for neighbors in combinations(graph.nodes(), 3):
+        candidate = graph.copy()
+        candidate.add_node(new_node)
+        candidate.add_edges_from((new_node, neighbor) for neighbor in neighbors)
+        graphs.append(candidate)
+    return graphs
+
+
+def _henneberg_h2_graphs(graph: nx.Graph) -> list[nx.Graph]:
+    new_node = graph.number_of_nodes()
+    graphs = []
+    for first, second in list(graph.edges()):
+        remaining_nodes = [node for node in graph.nodes() if node not in (first, second)]
+        for extra_neighbors in combinations(remaining_nodes, 2):
+            candidate = graph.copy()
+            candidate.remove_edge(first, second)
+            candidate.add_node(new_node)
+            candidate.add_edges_from(
+                (
+                    (new_node, first),
+                    (new_node, second),
+                    (new_node, extra_neighbors[0]),
+                    (new_node, extra_neighbors[1]),
+                )
+            )
+            graphs.append(candidate)
+    return graphs
+
+
+def _unique_henneberg_graphs(graphs: list[nx.Graph]) -> list[nx.Graph]:
+    buckets: dict[tuple[int, int, tuple[int, ...], int], list[nx.Graph]] = {}
+    unique_graphs = []
+    for graph in graphs:
+        bucket_key = (
+            graph.number_of_nodes(),
+            graph.number_of_edges(),
+            tuple(sorted(dict(graph.degree()).values())),
+            sum(nx.triangles(graph).values()) // 3,
+        )
+        bucket = buckets.setdefault(bucket_key, [])
+        if any(nx.is_isomorphic(graph, unique_graph) for unique_graph in bucket):
+            continue
+        bucket.append(graph)
+        unique_graphs.append(graph)
+    return unique_graphs
+
+
+def _odd_degree_nodes(graph: nx.Graph) -> list[int]:
+    return [int(node) for node, degree in graph.degree() if degree % 2 == 1]
+
+
+def _minimum_trail_count(graph: nx.Graph) -> int:
+    if graph.number_of_edges() == 0:
+        return 0
+    return max(1, len(_odd_degree_nodes(graph)) // 2)
+
+
+def _decompose_henneberg_routes(
+    graph: nx.Graph,
+    tube_count: int,
+) -> tuple[tuple[int, ...], ...] | None:
+    edge_count = graph.number_of_edges()
+    if edge_count % tube_count != 0:
+        return None
+
+    target_route_edges = edge_count // tube_count
+    all_edges = frozenset(_sorted_graph_edges(graph))
+    nodes = tuple(sorted(int(node) for node in graph.nodes()))
+
+    def search(
+        remaining_edges: frozenset[tuple[int, int]],
+        routes: tuple[tuple[int, ...], ...],
+    ) -> tuple[tuple[int, ...], ...] | None:
+        remaining_routes = tube_count - len(routes)
+        if remaining_routes == 0:
+            return routes if not remaining_edges else None
+        if len(remaining_edges) != remaining_routes * target_route_edges:
+            return None
+
+        for route in _trails_with_edge_count(nodes, remaining_edges, target_route_edges):
+            route_edges = frozenset(
+                _graph_edge_key(from_node, to_node)
+                for from_node, to_node in zip(route, route[1:], strict=False)
+            )
+            if len(route_edges) != target_route_edges or not route_edges <= remaining_edges:
+                continue
+            result = search(remaining_edges - route_edges, (*routes, route))
+            if result is not None:
+                return result
+        return None
+
+    return search(all_edges, ())
+
+
+def _trails_with_edge_count(
+    nodes: tuple[int, ...],
+    edges: frozenset[tuple[int, int]],
+    edge_count: int,
+) -> tuple[tuple[int, ...], ...]:
+    adjacency: dict[int, list[tuple[int, tuple[int, int]]]] = {node: [] for node in nodes}
+    for first, second in edges:
+        adjacency[first].append((second, (first, second)))
+        adjacency[second].append((first, (first, second)))
+    for neighbors in adjacency.values():
+        neighbors.sort()
+
+    seen: set[tuple[int, ...]] = set()
+    trails: list[tuple[int, ...]] = []
+
+    def canonical_route(route: tuple[int, ...]) -> tuple[int, ...]:
+        reversed_route = tuple(reversed(route))
+        return min(route, reversed_route)
+
+    def search(route: tuple[int, ...], remaining_edges: frozenset[tuple[int, int]]) -> None:
+        if len(route) == edge_count + 1:
+            canonical = canonical_route(route)
+            if canonical not in seen:
+                seen.add(canonical)
+                trails.append(route)
+            return
+
+        current = route[-1]
+        for next_node, edge in adjacency[current]:
+            if edge not in remaining_edges:
+                continue
+            search((*route, next_node), remaining_edges - {edge})
+
+    for node in nodes:
+        search((node,), edges)
+    trails.sort(key=canonical_route)
+    return tuple(trails)
+
+
+def _best_henneberg_embedding(
+    graph: nx.Graph,
+    graph_index: int,
+    tube_count: int,
+) -> np.ndarray:
+    node_count = graph.number_of_nodes()
+    edges = _sorted_graph_edges(graph)
+    best_coordinates: np.ndarray | None = None
+    best_wcri = -np.inf
+    best_edge_rms_error = np.inf
+
+    for seed_index in range(HENNEBERG_EMBEDDING_TRIALS):
+        seed = node_count * 10_000 + tube_count * 1_000 + graph_index * 100 + seed_index
+        layout = nx.spring_layout(
+            graph,
+            dim=3,
+            seed=seed,
+            iterations=HENNEBERG_LAYOUT_ITERATIONS,
+            scale=None,
+        )
+        coordinates = np.array(
+            [layout[node] for node in sorted(graph.nodes())],
+            dtype=float,
+        )
+        candidates = (
+            _normalize_henneberg_embedding(coordinates, edges),
+            _refine_henneberg_embedding(graph, coordinates, edges),
+        )
+        for candidate in candidates:
+            wcri = _worst_case_rigidity_index(candidate, edges)
+            edge_rms_error = _edge_length_rms_error(candidate, edges, target_length=1.0)
+            if best_coordinates is None or wcri > best_wcri or (
+                wcri == best_wcri and edge_rms_error < best_edge_rms_error
+            ):
+                best_coordinates = candidate
+                best_wcri = wcri
+                best_edge_rms_error = edge_rms_error
+
+    if best_coordinates is None:
+        raise ValueError("Could not embed Henneberg graph.")
+    return best_coordinates
+
+
+def _refine_henneberg_embedding(
+    graph: nx.Graph,
+    coordinates: np.ndarray,
+    edges: tuple[tuple[int, int], ...],
+) -> np.ndarray:
+    node_names = tuple(sorted(graph.nodes()))
+    node_index = {node: index for index, node in enumerate(node_names)}
+    pairs = []
+    for first_index, first in enumerate(node_names):
+        for second in node_names[first_index + 1 :]:
+            is_edge = graph.has_edge(first, second)
+            pairs.append(
+                (
+                    node_index[first],
+                    node_index[second],
+                    1.0 if is_edge else HENNEBERG_NONEDGE_DISTANCE,
+                    4.0 if is_edge else 0.5,
+                )
+            )
+
+    initial = _normalize_henneberg_embedding(coordinates, edges)
+
+    def residuals(flat_coordinates: np.ndarray) -> np.ndarray:
+        candidate = flat_coordinates.reshape((len(node_names), 3))
+        candidate = candidate - np.mean(candidate, axis=0)
+        return np.array(
+            [
+                math.sqrt(weight)
+                * (np.linalg.norm(candidate[second] - candidate[first]) - target_distance)
+                for first, second, target_distance, weight in pairs
+            ],
+            dtype=float,
+        )
+
+    result = least_squares(
+        residuals,
+        initial.reshape(-1),
+        max_nfev=HENNEBERG_LAYOUT_REFINEMENT_EVALUATIONS,
+        ftol=1e-9,
+        xtol=1e-9,
+        gtol=1e-9,
+    )
+    return _normalize_henneberg_embedding(result.x.reshape((len(node_names), 3)), edges)
+
+
+def _normalize_henneberg_embedding(
+    coordinates: np.ndarray,
+    edges: tuple[tuple[int, int], ...],
+) -> np.ndarray:
+    coordinates = coordinates - np.mean(coordinates, axis=0)
+    coordinates = _normalize_usevitch_candidate_edge_lengths(coordinates, edges)
+    coordinates = coordinates - np.mean(coordinates, axis=0)
+    coordinates[:, 2] -= np.min(coordinates[:, 2])
+    coordinates[:, 2] += 0.1
+    return coordinates
+
+
+def _sorted_graph_edges(graph: nx.Graph) -> tuple[tuple[int, int], ...]:
+    return tuple(sorted(_graph_edge_key(first, second) for first, second in graph.edges()))
+
+
+def _graph_edge_key(first: int, second: int) -> tuple[int, int]:
+    return (first, second) if first <= second else (second, first)
 
 
 def _make_usevitch_preset(
@@ -567,12 +949,34 @@ def _usevitch_presets() -> dict[str, Callable[[float], tuple[NodeDict, TriangleD
     return presets
 
 
+def _make_henneberg_preset(
+    node_count: int,
+    tube_count: int,
+) -> Callable[[float], tuple[NodeDict, ShapeDict]]:
+    return lambda scale=1.0: get_henneberg_routed_graph_definition(
+        node_count,
+        tube_count,
+        scale=scale,
+    )
+
+
+def _henneberg_presets() -> dict[str, Callable[[float], tuple[NodeDict, ShapeDict]]]:
+    return {
+        f"henneberg_n{node_count}_{tube_count}tube": _make_henneberg_preset(
+            node_count,
+            tube_count,
+        )
+        for node_count, tube_count in HENNEBERG_PRESET_SPECS
+    }
+
+
 PRESETS: dict[str, Callable[[float], tuple[NodeDict, TriangleDict | ShapeDict]]] = {
     "octahedron": get_octahedron_definition,
     "icosahedron": get_icosahedron_definition,
     "solar_array": get_solar_array_definition,
     "tetrahedron": get_tetrahedron_definition,
     **_usevitch_presets(),
+    **_henneberg_presets(),
 }
 
 

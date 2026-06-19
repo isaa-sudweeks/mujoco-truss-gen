@@ -19,7 +19,8 @@ Supported workflows include:
 
 - Generate MuJoCo `MjSpec` models for triangle-based truss structures.
 - Use built-in `"octahedron"`, `"icosahedron"`, `"solar_array"`,
-  `"tetrahedron"`, and Usevitch et al. triangle-decomposable graph presets.
+  `"tetrahedron"`, Usevitch et al. triangle-decomposable graph presets, and
+  Henneberg routed continuous-tendon graph presets.
 - Build abstract slide-joint models or realistic triangle-body models.
 - Save generated MuJoCo XML.
 - Wrap generated models in Gymnasium-compatible environments.
@@ -48,6 +49,7 @@ dependencies:
 
 - `gymnasium`
 - `mujoco`
+- `networkx`
 - `numpy`
 - `scipy`
 
@@ -110,6 +112,10 @@ Use `MujocoNodeVelocityCommandEnv` for node-level scalar velocity commands that
 are mapped through the route incidence matrix to edge actuator commands. For
 manual testing, `view_node_velocity_terminal(spec)` opens the MuJoCo viewer and
 accepts terminal commands such as `set node_2 0.01`, `show`, `zero`, and `quit`.
+Henneberg routed graph presets such as `henneberg_n8_2tube` are generated from
+H1/H2 minimally rigid graph candidates, decomposed into continuous routed
+tendons, and accepted only after a deterministic 3D embedding passes an
+infinitesimal-rigidity check.
 
 ## Documentation
 
