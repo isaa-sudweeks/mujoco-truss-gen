@@ -11,6 +11,7 @@ import pytest
 
 from mujoco_truss_gen import (
     HENNEBERG_PRESET_SPECS,
+    HENNEBERG_PRESET_VARIANT_COUNTS,
     HENNEBERG_RIGIDITY_THRESHOLD,
     PRESETS,
     AccelerometerConfig,
@@ -51,6 +52,21 @@ from mujoco_truss_gen.mujoco_model.io_viewer import (
 )
 
 
+def _default_compile_preset_names() -> list[str]:
+    return [
+        preset_name
+        for preset_name in PRESETS
+        if not _is_indexed_henneberg_variant(preset_name)
+    ]
+
+
+def _is_indexed_henneberg_variant(preset_name: str) -> bool:
+    if not preset_name.startswith("henneberg_"):
+        return False
+    suffix = preset_name.rsplit("_", maxsplit=1)[-1]
+    return suffix.isdigit()
+
+
 def test_generated_spec_runs_in_all_builtin_envs() -> None:
     spec = get_mujoco_spec("octahedron", realistic=False)
 
@@ -75,7 +91,7 @@ def test_generated_spec_runs_in_all_builtin_envs() -> None:
 def test_builtin_presets_compile() -> None:
     assert {"octahedron", "icosahedron", "tetrahedron"} <= set(PRESETS)
 
-    for preset_name in PRESETS:
+    for preset_name in _default_compile_preset_names():
         get_mujoco_spec(preset_name, realistic=False).compile()
 
     for preset_name in ("octahedron", "icosahedron", "solar_array"):
@@ -172,6 +188,17 @@ def test_henneberg_graph_generation_counts_match_reference() -> None:
         (7, 26, 10, 0, 3),
         (8, 374, 85, 190, 89),
     ]
+    assert HENNEBERG_PRESET_VARIANT_COUNTS == {
+        (5, 1): 1,
+        (6, 1): 2,
+        (6, 2): 1,
+        (6, 3): 1,
+        (7, 1): 10,
+        (7, 3): 3,
+        (8, 1): 85,
+        (8, 2): 190,
+        (8, 3): 89,
+    }
 
 
 def test_henneberg_routed_graph_presets_are_rigid_equal_route_covers() -> None:
@@ -179,17 +206,27 @@ def test_henneberg_routed_graph_presets_are_rigid_equal_route_covers() -> None:
         f"henneberg_n{node_count}_{tube_count}tube"
         for node_count, tube_count in HENNEBERG_PRESET_SPECS
     }
+    expected_presets.update(
+        f"henneberg_n{node_count}_{tube_count}tube_{preset_index}"
+        for (node_count, tube_count), variant_count in HENNEBERG_PRESET_VARIANT_COUNTS.items()
+        for preset_index in range(1, variant_count + 1)
+    )
     assert expected_presets <= set(PRESETS)
 
     for node_count, tube_count in HENNEBERG_PRESET_SPECS:
         preset_name = f"henneberg_n{node_count}_{tube_count}tube"
+        indexed_preset_name = f"{preset_name}_1"
         node_dict, shape_dict = get_preset_definition(preset_name)
+        indexed_node_dict, indexed_shape_dict = get_preset_definition(indexed_preset_name)
         direct_nodes, direct_shapes = get_henneberg_routed_graph_definition(
             node_count,
             tube_count,
+            preset_index=1,
         )
         scaled_nodes, scaled_shapes = get_preset_definition(preset_name, scale=2.5)
 
+        assert indexed_node_dict == node_dict
+        assert indexed_shape_dict == shape_dict
         assert node_dict == direct_nodes
         assert shape_dict == direct_shapes
         assert scaled_shapes == shape_dict
@@ -232,6 +269,36 @@ def test_henneberg_routed_graph_presets_are_rigid_equal_route_covers() -> None:
         assert rank == 3 * node_count - 6
 
         get_mujoco_spec(preset_name, realistic=False).compile()
+
+
+def test_henneberg_indexed_presets_can_select_distinct_configurations() -> None:
+    first_nodes, first_shapes = get_preset_definition("henneberg_n6_1tube_1")
+    second_nodes, second_shapes = get_preset_definition("henneberg_n6_1tube_2")
+
+    assert first_shapes != second_shapes or first_nodes != second_nodes
+    get_mujoco_spec("henneberg_n6_1tube_2", realistic=False).compile()
+
+    high_index_nodes, high_index_shapes = get_preset_definition("henneberg_n8_2tube_190")
+    high_index_edges = tuple(
+        sorted(
+            tuple(
+                sorted(
+                    (
+                        int(from_node.removeprefix("node_")) - 1,
+                        int(to_node.removeprefix("node_")) - 1,
+                    )
+                )
+            )
+            for shape in high_index_shapes.values()
+            for from_node, to_node in zip(shape["route"], shape["route"][1:], strict=False)
+        )
+    )
+    high_index_coordinates = np.array(
+        [high_index_nodes[f"node_{index}"] for index in range(1, 9)],
+        dtype=float,
+    )
+    assert [len(shape["route"]) - 1 for shape in high_index_shapes.values()] == [9, 9]
+    assert preset_module._rigidity_matrix_rank(high_index_coordinates, high_index_edges) == 18
 
 
 def test_henneberg_preset_definitions_are_deep_copied() -> None:
@@ -1133,7 +1200,7 @@ def test_custom_routed_shape_nodes_are_lifted_above_ground() -> None:
 
 
 def test_builtin_presets_reset_with_nodes_above_ground() -> None:
-    for preset_name in PRESETS:
+    for preset_name in _default_compile_preset_names():
         realistic_values = (False, True) if preset_name != "tetrahedron" else (False,)
         for realistic in realistic_values:
             env = MujocoTrussEnv(

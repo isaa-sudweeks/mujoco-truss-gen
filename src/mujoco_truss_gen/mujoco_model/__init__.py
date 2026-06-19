@@ -32,6 +32,7 @@ from mujoco_truss_gen.mujoco_model.io_viewer import (
 from mujoco_truss_gen.mujoco_model.model import MujocoModel
 from mujoco_truss_gen.mujoco_model.presets import (
     HENNEBERG_PRESET_SPECS,
+    HENNEBERG_PRESET_VARIANT_COUNTS,
     HENNEBERG_RIGIDITY_THRESHOLD,
     PRESETS,
     USEVITCH_GRAPH_LABELS,
@@ -54,6 +55,7 @@ __all__ = [
     "NodeVelocityController",
     "PRESETS",
     "HENNEBERG_PRESET_SPECS",
+    "HENNEBERG_PRESET_VARIANT_COUNTS",
     "HENNEBERG_RIGIDITY_THRESHOLD",
     "TrussPhysicalParameters",
     "USEVITCH_GRAPH_LABELS",

@@ -9,6 +9,7 @@ from mujoco_truss_gen.mesh_import import stl_to_shape_dict
 from mujoco_truss_gen.mujoco_model import (
     DEFAULT_ACCELEROMETER_CONFIG,
     HENNEBERG_PRESET_SPECS,
+    HENNEBERG_PRESET_VARIANT_COUNTS,
     HENNEBERG_RIGIDITY_THRESHOLD,
     PRESETS,
     USEVITCH_GRAPH_LABELS,
@@ -55,6 +56,7 @@ __all__ = [
     "NodeVelocityController",
     "PRESETS",
     "HENNEBERG_PRESET_SPECS",
+    "HENNEBERG_PRESET_VARIANT_COUNTS",
     "HENNEBERG_RIGIDITY_THRESHOLD",
     "TrussEnvConfig",
     "TrussPhysicalParameters",

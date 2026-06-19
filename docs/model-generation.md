@@ -131,21 +131,27 @@ caller.
   the largest worst case rigidity index; when candidates have nearly identical
   rigidity index values, the tie-breaker is the smaller RMS error from unit
   structural edge lengths.
-- `get_henneberg_routed_graph_definition(node_count, tube_count, scale=1.0)`
+- `get_henneberg_routed_graph_definition(node_count, tube_count, scale=1.0, preset_index=1)`
   returns a curated routed continuous-tendon graph generated from Henneberg H1
   and H2 moves starting at `K4`. Named presets are
-  `henneberg_n5_1tube`, `henneberg_n6_1tube`, `henneberg_n6_2tube`,
-  `henneberg_n6_3tube`, `henneberg_n7_1tube`, `henneberg_n7_3tube`,
-  `henneberg_n8_1tube`, `henneberg_n8_2tube`, and `henneberg_n8_3tube`.
+  indexed as `henneberg_n{nodes}_{tubes}tube_{index}`, for example
+  `henneberg_n6_1tube_2`. The unsuffixed names such as `henneberg_n6_1tube`
+  are aliases for variant `_1`. Available variant counts are:
+  `henneberg_n5_1tube_1`; `henneberg_n6_1tube_1` through `_2`;
+  `henneberg_n6_2tube_1`; `henneberg_n6_3tube_1`;
+  `henneberg_n7_1tube_1` through `_10`; `henneberg_n7_3tube_1` through `_3`;
+  `henneberg_n8_1tube_1` through `_85`; `henneberg_n8_2tube_1` through `_190`;
+  and `henneberg_n8_3tube_1` through `_89`.
   Henneberg candidates are filtered to minimally rigid edge counts
   (`3 * nodes - 6`), deduplicated with NetworkX graph isomorphism checks, and
   classified by the minimum number of trails required to cover every edge.
   `2tube` and `3tube` presets use equal edge counts per routed tendon. Each
   candidate embedding starts from `networkx.spring_layout(..., dim=3)`, is
   refined against unit edge-length and separated non-edge targets, and is
-  accepted only if the selected coordinates pass an infinitesimal-rigidity
-  gate using the 3D rigidity matrix with worst case rigidity index greater than
-  `1e-4`.
+  accepted only if the selected coordinates pass an infinitesimal-rigidity rank
+  gate using the 3D rigidity matrix. Worst case rigidity index is still used to
+  choose the best embedding candidate, but it is a quality score rather than the
+  hard indexed-preset acceptance criterion.
 - `get_perimeter(node_dict, triangle_dict)` computes each triangle perimeter
   from the first three vertices.
 - `save_xml(spec, filename)` writes `spec.to_xml()` to disk and returns the

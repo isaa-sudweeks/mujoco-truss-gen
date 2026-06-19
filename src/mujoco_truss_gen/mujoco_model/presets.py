@@ -198,6 +198,17 @@ HENNEBERG_PRESET_SPECS: tuple[tuple[int, int], ...] = (
     (8, 2),
     (8, 3),
 )
+HENNEBERG_PRESET_VARIANT_COUNTS: dict[tuple[int, int], int] = {
+    (5, 1): 1,
+    (6, 1): 2,
+    (6, 2): 1,
+    (6, 3): 1,
+    (7, 1): 10,
+    (7, 3): 3,
+    (8, 1): 85,
+    (8, 2): 190,
+    (8, 3): 89,
+}
 HENNEBERG_EMBEDDING_TRIALS = 24
 HENNEBERG_NONEDGE_DISTANCE = 1.6
 HENNEBERG_RIGIDITY_THRESHOLD = 1e-4
@@ -580,6 +591,8 @@ def get_henneberg_routed_graph_definition(
     node_count: int,
     tube_count: int,
     scale: float = 1.0,
+    *,
+    preset_index: int = 1,
 ) -> tuple[NodeDict, ShapeDict]:
     """Return a curated routed Henneberg graph preset.
 
@@ -591,6 +604,7 @@ def get_henneberg_routed_graph_definition(
     scale = _validate_scale(scale)
     node_count = int(node_count)
     tube_count = int(tube_count)
+    preset_index = int(preset_index)
     if (node_count, tube_count) not in HENNEBERG_PRESET_SPECS:
         supported = ", ".join(
             f"n{nodes}_{tubes}tube" for nodes, tubes in HENNEBERG_PRESET_SPECS
@@ -600,8 +614,14 @@ def get_henneberg_routed_graph_definition(
             f"node_count={node_count}, tube_count={tube_count}. "
             f"Supported presets: {supported}"
         )
+    if preset_index < 1:
+        raise ValueError("preset_index must be greater than zero.")
 
-    coordinates, routes = _selected_henneberg_routed_graph(node_count, tube_count)
+    coordinates, routes = _selected_henneberg_routed_graph(
+        node_count,
+        tube_count,
+        preset_index,
+    )
     node_dict = {
         f"node_{index + 1}": [float(coordinate) for coordinate in position]
         for index, position in enumerate(coordinates)
@@ -628,28 +648,52 @@ def _henneberg_route_shape(route: tuple[int, ...]) -> dict[str, list[list[str]] 
 def _selected_henneberg_routed_graph(
     node_count: int,
     tube_count: int,
+    preset_index: int,
 ) -> tuple[np.ndarray, tuple[tuple[int, ...], ...]]:
+    variant_count = HENNEBERG_PRESET_VARIANT_COUNTS[(node_count, tube_count)]
+    if preset_index > variant_count:
+        raise ValueError(
+            f"Henneberg n{node_count} {tube_count}-tube has {variant_count} "
+            f"preset variant(s); got preset_index={preset_index}."
+        )
+
+    candidate_index = 0
     for graph_index, graph in enumerate(_henneberg_graphs_by_node_count(node_count)[node_count]):
         if _minimum_trail_count(graph) != tube_count:
             continue
         if graph.number_of_edges() % tube_count != 0:
             continue
 
-        routes = _decompose_henneberg_routes(graph, tube_count)
-        if routes is None:
+        candidate_index += 1
+        if candidate_index != preset_index:
             continue
 
-        embedding = _best_henneberg_embedding(graph, graph_index, tube_count)
+        routes = _decompose_henneberg_routes(graph, tube_count)
+        if routes is None:
+            raise ValueError(
+                f"Henneberg n{node_count} {tube_count}-tube preset variant "
+                f"{preset_index} does not have a route decomposition."
+            )
+
+        try:
+            embedding = _best_henneberg_embedding(graph, graph_index, tube_count)
+        except ValueError as exc:
+            raise ValueError(
+                f"Could not embed Henneberg n{node_count} {tube_count}-tube "
+                f"preset variant {preset_index}."
+            ) from exc
+
         edges = _sorted_graph_edges(graph)
-        if (
-            _worst_case_rigidity_index(embedding, edges) > HENNEBERG_RIGIDITY_THRESHOLD
-            and _rigidity_matrix_rank(embedding, edges) == 3 * node_count - 6
-        ):
-            return embedding, routes
+        if _rigidity_matrix_rank(embedding, edges) != 3 * node_count - 6:
+            raise ValueError(
+                f"Henneberg n{node_count} {tube_count}-tube preset variant "
+                f"{preset_index} did not pass the infinitesimal-rigidity rank gate."
+            )
+        return embedding, routes
 
     raise ValueError(
-        f"No infinitesimally rigid Henneberg graph found for "
-        f"node_count={node_count}, tube_count={tube_count}."
+        f"Could not find Henneberg n{node_count} {tube_count}-tube "
+        f"preset variant {preset_index}."
     )
 
 
@@ -744,6 +788,13 @@ def _decompose_henneberg_routes(
     if edge_count % tube_count != 0:
         return None
 
+    if tube_count == 1:
+        return _single_henneberg_route(graph)
+
+    paired_routes = _paired_euler_henneberg_routes(graph, tube_count)
+    if paired_routes is not None:
+        return paired_routes
+
     target_route_edges = edge_count // tube_count
     all_edges = frozenset(_sorted_graph_edges(graph))
     nodes = tuple(sorted(int(node) for node in graph.nodes()))
@@ -773,11 +824,101 @@ def _decompose_henneberg_routes(
     return search(all_edges, ())
 
 
+def _single_henneberg_route(graph: nx.Graph) -> tuple[tuple[int, ...], ...] | None:
+    if not nx.has_eulerian_path(graph):
+        return None
+
+    odd_nodes = sorted(_odd_degree_nodes(graph))
+    source = odd_nodes[0] if odd_nodes else min(graph.nodes())
+    route_edges = list(nx.eulerian_path(graph, source=source))
+    if len(route_edges) != graph.number_of_edges():
+        return None
+
+    route = [int(route_edges[0][0])]
+    route.extend(int(to_node) for _, to_node in route_edges)
+    return (tuple(route),)
+
+
+def _paired_euler_henneberg_routes(
+    graph: nx.Graph,
+    tube_count: int,
+) -> tuple[tuple[int, ...], ...] | None:
+    odd_nodes = tuple(sorted(_odd_degree_nodes(graph)))
+    if len(odd_nodes) != 2 * tube_count:
+        return None
+
+    target_route_edges = graph.number_of_edges() // tube_count
+    for odd_pairing in _node_pairings(odd_nodes):
+        multigraph = nx.MultiGraph(graph)
+        for dummy_index, (first, second) in enumerate(odd_pairing):
+            multigraph.add_edge(first, second, key=f"dummy_{dummy_index}", dummy=True)
+
+        circuit = list(nx.eulerian_circuit(multigraph, source=odd_pairing[0][0], keys=True))
+        routes = _split_euler_circuit_at_dummy_edges(multigraph, circuit)
+        if routes is None:
+            continue
+        if len(routes) != tube_count:
+            continue
+        if {len(route) - 1 for route in routes} != {target_route_edges}:
+            continue
+        return routes
+    return None
+
+
+def _node_pairings(nodes: tuple[int, ...]) -> tuple[tuple[tuple[int, int], ...], ...]:
+    if not nodes:
+        return ((),)
+
+    first = nodes[0]
+    pairings = []
+    for index in range(1, len(nodes)):
+        second = nodes[index]
+        remaining = nodes[1:index] + nodes[index + 1 :]
+        for rest in _node_pairings(remaining):
+            pairings.append(((first, second), *rest))
+    return tuple(pairings)
+
+
+def _split_euler_circuit_at_dummy_edges(
+    multigraph: nx.MultiGraph,
+    circuit: list[tuple[int, int, str | int]],
+) -> tuple[tuple[int, ...], ...] | None:
+    if not circuit:
+        return None
+
+    dummy_indices = [
+        index
+        for index, (first, second, key) in enumerate(circuit)
+        if multigraph.edges[first, second, key].get("dummy", False)
+    ]
+    if not dummy_indices:
+        return None
+
+    start_index = (dummy_indices[0] + 1) % len(circuit)
+    rotated_circuit = circuit[start_index:] + circuit[:start_index]
+
+    routes = []
+    current_route = [int(rotated_circuit[0][0])]
+    for first, second, key in rotated_circuit:
+        if multigraph.edges[first, second, key].get("dummy", False):
+            if len(current_route) > 1:
+                routes.append(tuple(current_route))
+            current_route = [int(second)]
+            continue
+        if current_route[-1] != int(first):
+            return None
+        current_route.append(int(second))
+
+    if len(current_route) > 1:
+        routes.append(tuple(current_route))
+    return tuple(routes)
+
+
 def _trails_with_edge_count(
     nodes: tuple[int, ...],
     edges: frozenset[tuple[int, int]],
     edge_count: int,
-) -> tuple[tuple[int, ...], ...]:
+):
     adjacency: dict[int, list[tuple[int, tuple[int, int]]]] = {node: [] for node in nodes}
     for first, second in edges:
         adjacency[first].append((second, (first, second)))
@@ -786,30 +927,27 @@ def _trails_with_edge_count(
         neighbors.sort()
 
     seen: set[tuple[int, ...]] = set()
-    trails: list[tuple[int, ...]] = []
 
     def canonical_route(route: tuple[int, ...]) -> tuple[int, ...]:
         reversed_route = tuple(reversed(route))
         return min(route, reversed_route)
 
-    def search(route: tuple[int, ...], remaining_edges: frozenset[tuple[int, int]]) -> None:
+    def search(route: tuple[int, ...], remaining_edges: frozenset[tuple[int, int]]):
         if len(route) == edge_count + 1:
             canonical = canonical_route(route)
             if canonical not in seen:
                 seen.add(canonical)
-                trails.append(route)
+                yield route
             return
 
         current = route[-1]
         for next_node, edge in adjacency[current]:
             if edge not in remaining_edges:
                 continue
-            search((*route, next_node), remaining_edges - {edge})
+            yield from search((*route, next_node), remaining_edges - {edge})
 
     for node in nodes:
-        search((node,), edges)
-    trails.sort(key=canonical_route)
-    return tuple(trails)
+        yield from search((node,), edges)
 
 
 def _best_henneberg_embedding(
@@ -952,22 +1090,28 @@ def _usevitch_presets() -> dict[str, Callable[[float], tuple[NodeDict, TriangleD
 def _make_henneberg_preset(
     node_count: int,
     tube_count: int,
+    preset_index: int = 1,
 ) -> Callable[[float], tuple[NodeDict, ShapeDict]]:
     return lambda scale=1.0: get_henneberg_routed_graph_definition(
         node_count,
         tube_count,
+        preset_index=preset_index,
         scale=scale,
     )
 
 
 def _henneberg_presets() -> dict[str, Callable[[float], tuple[NodeDict, ShapeDict]]]:
-    return {
-        f"henneberg_n{node_count}_{tube_count}tube": _make_henneberg_preset(
+    presets: dict[str, Callable[[float], tuple[NodeDict, ShapeDict]]] = {}
+    for node_count, tube_count in HENNEBERG_PRESET_SPECS:
+        presets[f"henneberg_n{node_count}_{tube_count}tube"] = _make_henneberg_preset(
             node_count,
             tube_count,
         )
-        for node_count, tube_count in HENNEBERG_PRESET_SPECS
-    }
+        for preset_index in range(1, HENNEBERG_PRESET_VARIANT_COUNTS[(node_count, tube_count)] + 1):
+            presets[f"henneberg_n{node_count}_{tube_count}tube_{preset_index}"] = (
+                _make_henneberg_preset(node_count, tube_count, preset_index)
+            )
+    return presets
 
 
 PRESETS: dict[str, Callable[[float], tuple[NodeDict, TriangleDict | ShapeDict]]] = {

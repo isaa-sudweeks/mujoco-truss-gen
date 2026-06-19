@@ -112,10 +112,11 @@ Use `MujocoNodeVelocityCommandEnv` for node-level scalar velocity commands that
 are mapped through the route incidence matrix to edge actuator commands. For
 manual testing, `view_node_velocity_terminal(spec)` opens the MuJoCo viewer and
 accepts terminal commands such as `set node_2 0.01`, `show`, `zero`, and `quit`.
-Henneberg routed graph presets such as `henneberg_n8_2tube` are generated from
-H1/H2 minimally rigid graph candidates, decomposed into continuous routed
+Henneberg routed graph presets such as `henneberg_n8_2tube_1` are generated
+from H1/H2 minimally rigid graph candidates, decomposed into continuous routed
 tendons, and accepted only after a deterministic 3D embedding passes an
-infinitesimal-rigidity check.
+infinitesimal-rigidity check. The unsuffixed names, such as `henneberg_n8_2tube`,
+are aliases for variant `_1`.
 
 ## Documentation
 
