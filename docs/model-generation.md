@@ -130,7 +130,10 @@ caller.
   changing the candidate's shape. The selected embedding is the candidate with
   the largest worst case rigidity index; when candidates have nearly identical
   rigidity index values, the tie-breaker is the smaller RMS error from unit
-  structural edge lengths.
+  structural edge lengths. Generated embeddings are finally transformed into a
+  reproducible frame: a support face through `node_1` lies on `z = 0`,
+  `node_1` is at the origin, and the second-highest numbered node on that face
+  lies on the positive x axis.
 - `get_henneberg_routed_graph_definition(node_count, tube_count, scale=1.0, preset_index=1)`
   returns a curated routed continuous-tendon graph generated from Henneberg H1
   and H2 moves starting at `K4`. Named presets are
@@ -151,7 +154,8 @@ caller.
   accepted only if the selected coordinates pass an infinitesimal-rigidity rank
   gate using the 3D rigidity matrix. Worst case rigidity index is still used to
   choose the best embedding candidate, but it is a quality score rather than the
-  hard indexed-preset acceptance criterion.
+  hard indexed-preset acceptance criterion. The final coordinates use the same
+  reproducible `node_1` ground-face frame as the Usevitch graph presets.
 - `get_perimeter(node_dict, triangle_dict)` computes each triangle perimeter
   from the first three vertices.
 - `save_xml(spec, filename)` writes `spec.to_xml()` to disk and returns the

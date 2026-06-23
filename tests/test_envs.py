@@ -42,6 +42,8 @@ from mujoco_truss_gen.mujoco_model.constants import (
     ACTIVE_NODE_MASS,
     ACTUATOR_CTRL_RANGE,
     EDGE_TENDON_WIDTH,
+    GEOM_CONTACT_AFFINITY,
+    GEOM_CONTACT_TYPE,
     HINGE_DAMPING,
     NODE_RADIUS,
     PASSIVE_NODE_MASS,
@@ -65,6 +67,29 @@ def _is_indexed_henneberg_variant(preset_name: str) -> bool:
         return False
     suffix = preset_name.rsplit("_", maxsplit=1)[-1]
     return suffix.isdigit()
+
+
+def _node_coordinates(node_dict: dict[str, list[float]], node_count: int) -> np.ndarray:
+    return np.array(
+        [node_dict[f"node_{index}"] for index in range(1, node_count + 1)],
+        dtype=float,
+    )
+
+
+def _assert_node_one_ground_face_frame(
+    coordinates: np.ndarray,
+    candidate_faces: tuple[tuple[int, int, int], ...],
+) -> None:
+    ground_face = preset_module._select_node_one_ground_face(coordinates, candidate_faces)
+    assert ground_face is not None
+    x_axis_node = sorted(ground_face)[-2]
+
+    np.testing.assert_allclose(coordinates[0], np.zeros(3), atol=1e-8)
+    np.testing.assert_allclose(coordinates[list(ground_face), 2], np.zeros(3), atol=1e-8)
+    assert float(np.min(coordinates[:, 2])) >= -1e-8
+    assert coordinates[x_axis_node, 0] > 0.0
+    assert coordinates[x_axis_node, 1] == pytest.approx(0.0, abs=1e-8)
+    assert coordinates[x_axis_node, 2] == pytest.approx(0.0, abs=1e-8)
 
 
 def test_generated_spec_runs_in_all_builtin_envs() -> None:
@@ -254,11 +279,15 @@ def test_henneberg_routed_graph_presets_are_rigid_equal_route_covers() -> None:
         assert len(route_edges) == 3 * node_count - 6
         assert len(set(route_edges)) == len(route_edges)
 
-        coordinates = np.array(
-            [node_dict[f"node_{index}"] for index in range(1, node_count + 1)],
-            dtype=float,
-        )
+        coordinates = _node_coordinates(node_dict, node_count)
         assert np.all(np.isfinite(coordinates))
+        _assert_node_one_ground_face_frame(
+            coordinates,
+            preset_module._triangular_faces_through_node_one(
+                node_count,
+                tuple(sorted(route_edges)),
+            ),
+        )
         edge_lengths = preset_module._edge_lengths(coordinates, tuple(sorted(route_edges)))
         assert np.min(edge_lengths) > 1e-8
         assert np.mean(edge_lengths) == pytest.approx(1.0)
@@ -293,11 +322,12 @@ def test_henneberg_indexed_presets_can_select_distinct_configurations() -> None:
             for from_node, to_node in zip(shape["route"], shape["route"][1:], strict=False)
         )
     )
-    high_index_coordinates = np.array(
-        [high_index_nodes[f"node_{index}"] for index in range(1, 9)],
-        dtype=float,
-    )
+    high_index_coordinates = _node_coordinates(high_index_nodes, 8)
     assert [len(shape["route"]) - 1 for shape in high_index_shapes.values()] == [9, 9]
+    _assert_node_one_ground_face_frame(
+        high_index_coordinates,
+        preset_module._triangular_faces_through_node_one(8, high_index_edges),
+    )
     assert preset_module._rigidity_matrix_rank(high_index_coordinates, high_index_edges) == 18
 
 
@@ -354,6 +384,20 @@ def test_usevitch_embedding_search_avoids_near_singular_presets() -> None:
         wcri = preset_module._worst_case_rigidity_index(coordinates, edges)
 
         assert wcri > 1e-4
+
+
+def test_usevitch_embeddings_start_from_node_one_ground_face() -> None:
+    for graph_label in preset_module.USEVITCH_GRAPH_LABELS:
+        node_count = preset_module._node_count_from_usevitch_label(graph_label)
+        edges = tuple(sorted(preset_module._usevitch_edges_from_label(graph_label, node_count)))
+        partitions = preset_module._triangle_partitions(set(edges), node_count)
+        candidate_faces = preset_module._triangular_faces_through_node_one(node_count, edges)
+
+        for partition_index in range(1, len(partitions) + 1):
+            node_dict, _ = get_usevitch_graph_definition(graph_label, partition_index)
+            coordinates = _node_coordinates(node_dict, node_count)
+
+            _assert_node_one_ground_face_frame(coordinates, candidate_faces)
 
 
 def test_usevitch_embedding_search_skips_fallback_when_default_is_rigid(
@@ -937,6 +981,17 @@ def test_generated_spec_uses_firehose_steel_and_black_materials() -> None:
         _xml_vector(node_geom.get("rgba", "")),
         [0.18, 0.18, 0.18, 1.0],
     )
+
+
+def test_realistic_generated_node_geoms_have_peer_contacts_enabled() -> None:
+    model = get_mujoco_spec("octahedron", realistic=True).compile()
+
+    for body_name in ("node_1", "node_2", "connector_ball_node_1"):
+        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        assert body_id != -1
+        geom_id = int(model.body_geomadr[body_id])
+        assert int(model.geom_contype[geom_id]) == GEOM_CONTACT_TYPE
+        assert int(model.geom_conaffinity[geom_id]) == GEOM_CONTACT_AFFINITY
 
 
 def test_realistic_spec_adds_accelerometers_to_each_generated_node() -> None:

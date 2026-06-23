@@ -1,23 +1,25 @@
-"""Interactively position-command the realistic octahedron in MuJoCo.
+"""Interactively position-command a realistic truss preset in MuJoCo.
 
 Run on macOS with:
 
     .venv/bin/mjpython experiments/system_id/interactive_octahedron_position_control.py
+    .venv/bin/mjpython experiments/system_id/interactive_octahedron_position_control.py octahedron
+    .venv/bin/mjpython experiments/system_id/interactive_octahedron_position_control.py tetrahedron
 
-Enter an eight-element Python/JSON array at the ``position>`` prompt. Each
-entry controls one active physical triangle node; the array-to-node mapping is
-printed at startup and shown as labels in the viewer. Values are relative
-scalar node-position offsets in meters. Passive triangle nodes remain at zero,
-and active node commands are mapped to tendon commands with the same oriented
-incidence rule used by the routed-tube node controller.
+Enter a Python/JSON array at the ``position>`` prompt. Each entry controls one
+non-passive control node; the array-to-node mapping is printed at startup and
+shown as labels in the viewer. Values are relative scalar node-position offsets
+in meters. Passive control nodes remain at zero, and node commands are mapped to
+tendon commands with the same oriented incidence rule used by the routed-tube
+node controller.
 """
 
 from __future__ import annotations
 
+import argparse
 import ast
 import threading
 import time
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from queue import Empty, SimpleQueue
 
@@ -25,7 +27,9 @@ import mujoco
 import numpy as np
 
 from mujoco_truss_gen import (
+    PRESETS,
     MujocoVelocityCommandEnv,
+    NodeVelocityController,
     TrussEnvConfig,
     TrussPhysicalParameters,
     get_mujoco_spec,
@@ -38,7 +42,8 @@ from mujoco_truss_gen.mujoco_model.tendons import initialize_actuator_lengths
 
 # Here is what I got to work -15000,0,-4000,-8000,0,15000,8000,4000
 
-ROBOT_SCALE = 1.27
+DEFAULT_ROBOT = "tetrahedron"
+ROBOT_SCALE = 1.2
 CONNECTOR_ROD_LENGTH = 0.22289
 
 PHYSICAL_PARAMS = TrussPhysicalParameters(
@@ -69,7 +74,7 @@ GEOM_FRICTION = np.array([1.0, 0.005, 0.0001], dtype=float)
 # Position error [m] -> intvelocity input [m/s].
 POSITION_GAIN = 4.0
 # Multiplies every value entered in a terminal position array.
-POSITION_COMMAND_SCALE = 0.0254/1125
+POSITION_COMMAND_SCALE = 0.0254 / 1125
 MAX_NODE_POSITION_OFFSET = 1.0
 STEPS_PER_CONTROL_UPDATE = 5
 RESET_SEED = 0
@@ -77,23 +82,52 @@ RESET_SEED = 0
 
 @dataclass(frozen=True, slots=True)
 class ActuatorEdge:
-    """One intvelocity actuator and its physical active/passive endpoints."""
+    """One intvelocity actuator and its oriented control-graph endpoints."""
 
     actuator_id: int
     activation_id: int
     tendon_name: str
-    triangle_name: str
     from_node: str
     to_node: str
-    active_node: str
-    passive_node: str
 
 
-def build_environment() -> MujocoVelocityCommandEnv:
+@dataclass(frozen=True, slots=True)
+class ControlTopology:
+    """Control nodes and actuator edges for the selected robot."""
+
+    node_names: list[str]
+    command_node_names: list[str]
+    passive_node_names: list[str]
+    node_to_physical_node: dict[str, str]
+    node_to_logical_node: dict[str, str]
+    edges: list[ActuatorEdge]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Interactively position-command a realistic truss preset."
+    )
+    parser.add_argument(
+        "robot",
+        nargs="?",
+        default=DEFAULT_ROBOT,
+        choices=sorted(PRESETS),
+        help=f"Preset robot configuration to load. Defaults to {DEFAULT_ROBOT!r}.",
+    )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=ROBOT_SCALE,
+        help=f"Preset scale passed to get_mujoco_spec(). Defaults to {ROBOT_SCALE:g}.",
+    )
+    return parser.parse_args()
+
+
+def build_environment(robot: str, scale: float) -> MujocoVelocityCommandEnv:
     spec = get_mujoco_spec(
-        "octahedron",
+        robot,
         realistic=True,
-        scale=ROBOT_SCALE,
+        scale=scale,
         physical_params=PHYSICAL_PARAMS,
     )
     env = MujocoVelocityCommandEnv(
@@ -112,29 +146,22 @@ def build_environment() -> MujocoVelocityCommandEnv:
     return env
 
 
-def actuator_edges(env: MujocoVelocityCommandEnv) -> list[ActuatorEdge]:
-    """Read actuator orientation and active/passive nodes from generated XML."""
-    xml = env.mj_model.xml
-    if xml is None:
-        raise RuntimeError("The generated model did not retain its MuJoCo XML.")
-
-    root = ET.fromstring(xml)
-    tendon_sites = {
-        spatial.get("name", ""): [site.get("site", "") for site in spatial.findall("site")]
-        for spatial in root.findall("./tendon/spatial")
-    }
-    node_triangles = {
-        node_body.get("name", ""): triangle_body.get("name", "")
-        for triangle_body in root.findall("./worldbody/body")
-        if triangle_body.get("name", "").startswith("tri_")
-        for node_body in triangle_body.findall("body")
-        if node_body.get("name", "").startswith("node_")
-    }
-    raw_edges = []
+def control_topology(env: MujocoVelocityCommandEnv) -> ControlTopology:
+    """Read control-node and actuator orientation metadata from the generated model."""
     model = env.mj_model.model
+    controller = NodeVelocityController(
+        model,
+        env.mj_model.xml,
+        env.mj_model.node_names,
+        env.mj_model.site_to_node,
+        env.mj_model.external_actuator_ids,
+    )
+    if not controller.enabled:
+        raise RuntimeError("The selected model does not expose a node velocity control graph.")
 
-    for actuator_id in env.mj_model.external_actuator_ids:
-        actuator_id = int(actuator_id)
+    edges = []
+    for edge in controller.edges:
+        actuator_id = int(edge.actuator_id)
         if model.actuator_dyntype[actuator_id] != mujoco.mjtDyn.mjDYN_INTEGRATOR:
             raise RuntimeError(
                 f"External actuator {model.actuator(actuator_id).name!r} is not intvelocity."
@@ -142,75 +169,50 @@ def actuator_edges(env: MujocoVelocityCommandEnv) -> list[ActuatorEdge]:
 
         tendon_id = int(model.actuator_trnid[actuator_id, 0])
         tendon_name = model.tendon(tendon_id).name
-        sites = tendon_sites.get(tendon_name, [])
-        physical_nodes = [
-            env.mj_model.site_to_node[site_name]
-            for site_name in sites
-            if site_name in env.mj_model.site_to_node
-        ]
-        if len(physical_nodes) != 2:
-            raise RuntimeError(
-                f"Expected tendon {tendon_name!r} to connect two nodes, got {physical_nodes}."
-            )
-        triangle_names = {node_triangles.get(node_name) for node_name in physical_nodes}
-        if None in triangle_names or len(triangle_names) != 1:
-            raise RuntimeError(
-                f"Expected tendon {tendon_name!r} to stay within one triangle, "
-                f"got endpoint triangles {triangle_names}."
-            )
-
         activation_id = int(model.actuator_actadr[actuator_id])
         if activation_id < 0:
             raise RuntimeError(f"Actuator {model.actuator(actuator_id).name!r} has no state.")
-        raw_edges.append(
-            (
+
+        edges.append(
+            ActuatorEdge(
                 actuator_id,
                 activation_id,
                 tendon_name,
-                triangle_names.pop(),
-                physical_nodes[0],
-                physical_nodes[1],
+                edge.from_node,
+                edge.to_node,
             )
         )
 
-    passive_by_triangle = {}
-    triangle_names = {edge[3] for edge in raw_edges}
-    for triangle_name in triangle_names:
-        triangle_edges = [edge for edge in raw_edges if edge[3] == triangle_name]
-        if len(triangle_edges) != 2:
-            raise RuntimeError(
-                f"Expected two active tendons in {triangle_name!r}, got {len(triangle_edges)}."
-            )
-        shared_nodes = set(triangle_edges[0][4:6]) & set(triangle_edges[1][4:6])
-        if len(shared_nodes) != 1:
-            raise RuntimeError(
-                f"Could not identify one passive node in {triangle_name!r}: {shared_nodes}."
-            )
-        passive_by_triangle[triangle_name] = shared_nodes.pop()
-
-    edges = []
-    for actuator_id, activation_id, tendon_name, triangle_name, from_node, to_node in raw_edges:
-        passive_node = passive_by_triangle[triangle_name]
-        active_nodes = {from_node, to_node} - {passive_node}
-        if len(active_nodes) != 1:
-            raise RuntimeError(f"Could not identify the active endpoint of {tendon_name!r}.")
-        edges.append(
-            ActuatorEdge(
-                actuator_id=actuator_id,
-                activation_id=activation_id,
-                tendon_name=tendon_name,
-                triangle_name=triangle_name,
-                from_node=from_node,
-                to_node=to_node,
-                active_node=active_nodes.pop(),
-                passive_node=passive_node,
-            )
+    external_actuator_count = len(env.mj_model.external_actuator_ids)
+    if len(edges) != external_actuator_count:
+        raise RuntimeError(
+            f"Expected one control edge per external actuator, got {len(edges)} edge(s) "
+            f"for {external_actuator_count} external actuator(s)."
         )
 
-    active_nodes = [edge.active_node for edge in edges]
-    if len(active_nodes) != 8 or len(set(active_nodes)) != 8:
-        raise RuntimeError(f"Expected eight unique active nodes, got {active_nodes}.")
-    return edges
+    passive_node_names = list(controller.passive_node_names)
+    passive_nodes = set(passive_node_names)
+    command_node_names = [
+        node_name for node_name in controller.node_names if node_name not in passive_nodes
+    ]
+    if not command_node_names:
+        raise RuntimeError("The selected model has no non-passive control nodes to command.")
+
+    graph = env.mj_model.control_graph
+    return ControlTopology(
+        node_names=list(controller.node_names),
+        command_node_names=command_node_names,
+        passive_node_names=passive_node_names,
+        node_to_physical_node={
+            node_name: graph.control_node_to_physical_node.get(node_name, node_name)
+            for node_name in controller.node_names
+        },
+        node_to_logical_node={
+            node_name: graph.control_node_to_logical_node.get(node_name, node_name)
+            for node_name in controller.node_names
+        },
+        edges=edges,
+    )
 
 
 def incidence_matrix(
@@ -236,7 +238,8 @@ def parse_position_command(raw_command: str, node_count: int) -> np.ndarray | st
     try:
         values = np.asarray(ast.literal_eval(command), dtype=float)
     except (SyntaxError, ValueError, TypeError):
-        raise ValueError("Enter a numeric array such as [0, 0.02, 0, 0, 0, 0, 0, 0].") from None
+        example = [0.0] * node_count
+        raise ValueError(f"Enter a numeric array such as {example}.") from None
 
     if values.shape != (node_count,):
         raise ValueError(f"Expected an array with {node_count} values, got shape {values.shape}.")
@@ -245,23 +248,33 @@ def parse_position_command(raw_command: str, node_count: int) -> np.ndarray | st
     return values
 
 
-def print_help(edges: list[ActuatorEdge]) -> None:
+def print_help(topology: ControlTopology) -> None:
     print("\nCommands:")
-    print("  [p0, p1, ...]  set the eight active physical node positions")
+    print(
+        "  [p0, p1, ...]  set the "
+        f"{len(topology.command_node_names)} non-passive control-node positions"
+    )
     print("  show            show the current position target")
     print("  zero            set every position target to zero")
     print("  reset           reset the simulation and zero the target")
     print("  help            show this message")
     print("  quit            close the viewer")
     print("Array mapping:")
-    for index, edge in enumerate(edges):
-        sign = "+" if edge.to_node == edge.active_node else "-"
-        print(
-            f"  index {index}: {edge.active_node} in {edge.triangle_name} "
-            f"({edge.tendon_name} offset = {sign}command[{index}])"
-        )
+    for index, node_name in enumerate(topology.command_node_names):
+        logical_node = topology.node_to_logical_node[node_name]
+        physical_node = topology.node_to_physical_node[node_name]
+        logical_suffix = "" if logical_node == node_name else f", logical={logical_node}"
+        physical_suffix = "" if physical_node == node_name else f", physical={physical_node}"
+        print(f"  index {index}: {node_name}{logical_suffix}{physical_suffix}")
+    if topology.passive_node_names:
+        print("Passive control nodes:")
+        for node_name in topology.passive_node_names:
+            print(f"  {node_name}")
+    print("Actuator edge mapping:")
+    for edge in topology.edges:
+        print(f"  {edge.tendon_name}: {edge.to_node} - {edge.from_node}")
     print(
-        "Each passive triangle node is fixed at command zero. Tendon offsets use "
+        "Passive control nodes are fixed at command zero. Tendon offsets use "
         "node[to] - node[from], matching the routed-tube node controller."
     )
     print(f"Typed values are multiplied by POSITION_COMMAND_SCALE={POSITION_COMMAND_SCALE:g}.")
@@ -280,15 +293,17 @@ def read_terminal(command_queue: SimpleQueue[str], stop_event: threading.Event) 
 def active_node_positions(
     env: MujocoVelocityCommandEnv,
     node_names: list[str],
+    node_to_physical_node: dict[str, str],
 ) -> dict[str, np.ndarray]:
     model = env.mj_model.model
     data = env.mj_model.data
     positions = {}
     for node_name in node_names:
+        physical_node = node_to_physical_node[node_name]
         site_id = mujoco.mj_name2id(
             model,
             mujoco.mjtObj.mjOBJ_SITE,
-            node_name,
+            physical_node,
         )
         if site_id >= 0:
             positions[node_name] = data.site_xpos[site_id].copy()
@@ -298,6 +313,8 @@ def active_node_positions(
 def add_node_labels(
     env: MujocoVelocityCommandEnv,
     node_names: list[str],
+    node_to_physical_node: dict[str, str],
+    robot_scale: float,
 ) -> None:
     viewer = env.viewer
     if viewer is None:
@@ -305,10 +322,10 @@ def add_node_labels(
 
     scene = viewer.user_scn
     scene.ngeom = 0
-    positions = active_node_positions(env, node_names)
-    offset = np.array([0.0, 0.0, 0.12 * ROBOT_SCALE], dtype=float)
+    positions = active_node_positions(env, node_names, node_to_physical_node)
+    offset = np.array([0.0, 0.0, 0.12 * robot_scale], dtype=float)
     identity = np.eye(3, dtype=float).ravel()
-    size = np.full(3, 0.025 * ROBOT_SCALE, dtype=float)
+    size = np.full(3, 0.025 * robot_scale, dtype=float)
     color = np.array([0.05, 0.05, 0.05, 1.0], dtype=np.float32)
 
     for index, node_name in enumerate(node_names):
@@ -330,11 +347,11 @@ def add_node_labels(
 
 def reset_environment(
     env: MujocoVelocityCommandEnv,
-    edges: list[ActuatorEdge],
+    topology: ControlTopology,
 ) -> np.ndarray:
     env.reset(seed=RESET_SEED)
     initialize_actuator_lengths(env.mj_model.model, env.mj_model.data)
-    return env.mj_model.data.act[[edge.activation_id for edge in edges]].copy()
+    return env.mj_model.data.act[[edge.activation_id for edge in topology.edges]].copy()
 
 
 def main() -> None:
@@ -345,12 +362,14 @@ def main() -> None:
     if TIMESTEP <= 0.0:
         raise ValueError("TIMESTEP must be greater than zero.")
 
-    env = build_environment()
-    edges = actuator_edges(env)
-    node_names = [edge.active_node for edge in edges]
+    args = parse_args()
+    env = build_environment(args.robot, args.scale)
+    topology = control_topology(env)
+    node_names = topology.command_node_names
+    edges = topology.edges
     command_matrix = incidence_matrix(node_names, edges)
     target_positions = np.zeros(len(node_names), dtype=float)
-    home_activations = reset_environment(env, edges)
+    home_activations = reset_environment(env, topology)
     activation_ids = np.array([edge.activation_id for edge in edges], dtype=int)
 
     command_queue: SimpleQueue[str] = SimpleQueue()
@@ -361,8 +380,8 @@ def main() -> None:
         daemon=True,
     )
 
-    print("Realistic octahedron intvelocity position control")
-    print_help(edges)
+    print(f"Realistic {args.robot} intvelocity position control")
+    print_help(topology)
     input_thread.start()
 
     try:
@@ -391,7 +410,7 @@ def main() -> None:
                 elif command in {"quit", "exit", "q"}:
                     stop_event.set()
                 elif command == "help":
-                    print_help(edges)
+                    print_help(topology)
                 elif command == "show":
                     print(f"Target: {target_positions.tolist()}")
                 elif command == "zero":
@@ -399,7 +418,7 @@ def main() -> None:
                     print("Target zeroed.")
                 elif command == "reset":
                     target_positions.fill(0.0)
-                    home_activations = reset_environment(env, edges)
+                    home_activations = reset_environment(env, topology)
                     print("Simulation reset and target zeroed.")
 
             desired_activations = home_activations + command_matrix @ target_positions
@@ -421,7 +440,7 @@ def main() -> None:
                 print("Maximum environment step count reached.")
                 stop_event.set()
 
-            add_node_labels(env, node_names)
+            add_node_labels(env, node_names, topology.node_to_physical_node, args.scale)
             env.render()
             time.sleep(max(TIMESTEP * STEPS_PER_CONTROL_UPDATE, 0.001))
     finally:

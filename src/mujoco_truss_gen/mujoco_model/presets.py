@@ -186,6 +186,7 @@ USEVITCH_MDS_FALLBACK_DISTANCE_PARAMETER_SETS: tuple[tuple[float, float, float],
 USEVITCH_MDS_MAX_ITERATIONS = 300
 USEVITCH_MDS_TOLERANCE = 1e-9
 USEVITCH_WCRI_TIE_RELATIVE_TOLERANCE = 0.01
+EMBEDDING_GROUND_FACE_TOLERANCE = 1e-9
 
 HENNEBERG_PRESET_SPECS: tuple[tuple[int, int], ...] = (
     (5, 1),
@@ -352,7 +353,7 @@ def _best_usevitch_embedding(
         best_edge_rms_error,
     )
     if best_coordinates is not None and best_wcri > USEVITCH_MDS_WCRI_FALLBACK_THRESHOLD:
-        return _normalize_usevitch_embedding(best_coordinates)
+        return _normalize_usevitch_embedding(best_coordinates, edges)
 
     for parameter_index, distance_parameters in enumerate(
         USEVITCH_MDS_FALLBACK_DISTANCE_PARAMETER_SETS,
@@ -370,7 +371,7 @@ def _best_usevitch_embedding(
 
     if best_coordinates is None:
         raise ValueError(f"Could not embed Usevitch graph label {graph_label}.")
-    return _normalize_usevitch_embedding(best_coordinates)
+    return _normalize_usevitch_embedding(best_coordinates, edges)
 
 
 def _search_usevitch_mds_parameters(
@@ -580,10 +581,145 @@ def _rigidity_matrix_rank(
     return int(np.linalg.matrix_rank(_rigidity_matrix(coordinates, edges), tol=tolerance))
 
 
-def _normalize_usevitch_embedding(coordinates: np.ndarray) -> np.ndarray:
+def _normalize_usevitch_embedding(
+    coordinates: np.ndarray,
+    edges: tuple[tuple[int, int], ...],
+) -> np.ndarray:
     coordinates = coordinates - np.mean(coordinates, axis=0)
-    coordinates[:, 2] -= np.min(coordinates[:, 2])
-    coordinates[:, 2] += 0.1
+    return _align_node_one_ground_face(
+        coordinates,
+        _triangular_faces_through_node_one(coordinates.shape[0], edges),
+    )
+
+
+def _triangular_faces_through_node_one(
+    node_count: int,
+    edges: tuple[tuple[int, int], ...],
+) -> tuple[tuple[int, int, int], ...]:
+    edge_set = frozenset(edges)
+    faces = []
+    for second, third in combinations(range(1, node_count), 2):
+        face_edges = (
+            _graph_edge_key(0, second),
+            _graph_edge_key(0, third),
+            _graph_edge_key(second, third),
+        )
+        if all(edge in edge_set for edge in face_edges):
+            faces.append((0, second, third))
+    return tuple(faces)
+
+
+def _align_node_one_ground_face(
+    coordinates: np.ndarray,
+    candidate_faces: tuple[tuple[int, int, int], ...],
+) -> np.ndarray:
+    """Place a support face through node_1 on z=0 with node_1 at the origin."""
+    coordinates = np.array(coordinates, dtype=float, copy=True)
+    if coordinates.shape[0] == 0:
+        return coordinates
+    if coordinates.shape[0] < 3:
+        return _snap_near_zero(coordinates - coordinates[0])
+
+    ground_face = _select_node_one_ground_face(coordinates, candidate_faces)
+    if ground_face is None:
+        return _snap_near_zero(coordinates - coordinates[0])
+    aligned, _ = _align_to_ground_face(coordinates, ground_face)
+    return _snap_near_zero(aligned)
+
+
+def _select_node_one_ground_face(
+    coordinates: np.ndarray,
+    candidate_faces: tuple[tuple[int, int, int], ...],
+) -> tuple[int, int, int] | None:
+    unique_candidate_faces = tuple(dict.fromkeys(_valid_node_one_faces(candidate_faces)))
+    fallback_faces = tuple(
+        face
+        for face in combinations(range(coordinates.shape[0]), 3)
+        if 0 in face and face not in unique_candidate_faces
+    )
+
+    best_fallback: tuple[float, tuple[int, int, int]] | None = None
+    for faces in (unique_candidate_faces, fallback_faces):
+        for face in faces:
+            alignment = _try_align_to_ground_face(coordinates, face)
+            if alignment is None:
+                continue
+            _, min_z = alignment
+            if min_z >= -EMBEDDING_GROUND_FACE_TOLERANCE:
+                return face
+            fallback = (min_z, face)
+            if best_fallback is None or fallback > best_fallback:
+                best_fallback = fallback
+
+    if best_fallback is None:
+        return None
+    return best_fallback[1]
+
+
+def _valid_node_one_faces(
+    faces: tuple[tuple[int, int, int], ...],
+) -> tuple[tuple[int, int, int], ...]:
+    return tuple(tuple(sorted(face)) for face in faces if len(set(face)) == 3 and 0 in face)
+
+
+def _try_align_to_ground_face(
+    coordinates: np.ndarray,
+    face: tuple[int, int, int],
+) -> tuple[np.ndarray, float] | None:
+    try:
+        return _align_to_ground_face(coordinates, face)
+    except ValueError:
+        return None
+
+
+def _align_to_ground_face(
+    coordinates: np.ndarray,
+    face: tuple[int, int, int],
+) -> tuple[np.ndarray, float]:
+    anchor_node = 0
+    x_axis_node = sorted(face)[-2]
+    shifted = coordinates - coordinates[anchor_node]
+    x_axis = shifted[x_axis_node]
+    x_axis_norm = float(np.linalg.norm(x_axis))
+    if x_axis_norm <= 1e-12:
+        raise ValueError("Cannot align a ground face with coincident x-axis nodes.")
+    x_axis = x_axis / x_axis_norm
+
+    face_nodes = tuple(node for node in face if node != anchor_node)
+    normal = np.cross(shifted[face_nodes[0]], shifted[face_nodes[1]])
+    normal_norm = float(np.linalg.norm(normal))
+    if normal_norm <= 1e-12:
+        raise ValueError("Cannot align a degenerate ground face.")
+    normal = normal / normal_norm
+
+    # Keep the x axis exactly in the ground-face plane before building the frame.
+    x_axis = x_axis - float(np.dot(x_axis, normal)) * normal
+    x_axis_norm = float(np.linalg.norm(x_axis))
+    if x_axis_norm <= 1e-12:
+        raise ValueError("Cannot align a ground face with an invalid x-axis node.")
+    x_axis = x_axis / x_axis_norm
+
+    alignments = []
+    for z_axis in (normal, -normal):
+        y_axis = np.cross(z_axis, x_axis)
+        y_axis_norm = float(np.linalg.norm(y_axis))
+        if y_axis_norm <= 1e-12:
+            continue
+        y_axis = y_axis / y_axis_norm
+        basis = np.column_stack((x_axis, y_axis, z_axis))
+        aligned = shifted @ basis
+        min_z = float(np.min(aligned[:, 2]))
+        total_z = float(np.sum(aligned[:, 2]))
+        alignments.append((min_z, total_z, aligned))
+
+    if not alignments:
+        raise ValueError("Cannot construct a ground-face frame.")
+    min_z, _, aligned = max(alignments, key=lambda option: (option[0], option[1]))
+    return aligned, min_z
+
+
+def _snap_near_zero(coordinates: np.ndarray) -> np.ndarray:
+    coordinates[np.abs(coordinates) <= EMBEDDING_GROUND_FACE_TOLERANCE] = 0.0
     return coordinates
 
 
@@ -1045,9 +1181,10 @@ def _normalize_henneberg_embedding(
     coordinates = coordinates - np.mean(coordinates, axis=0)
     coordinates = _normalize_usevitch_candidate_edge_lengths(coordinates, edges)
     coordinates = coordinates - np.mean(coordinates, axis=0)
-    coordinates[:, 2] -= np.min(coordinates[:, 2])
-    coordinates[:, 2] += 0.1
-    return coordinates
+    return _align_node_one_ground_face(
+        coordinates,
+        _triangular_faces_through_node_one(coordinates.shape[0], edges),
+    )
 
 
 def _sorted_graph_edges(graph: nx.Graph) -> tuple[tuple[int, int], ...]:

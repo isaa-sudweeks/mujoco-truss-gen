@@ -23,17 +23,17 @@ ROD_RADIUS = 0.025
 # Mass of each connector rod.
 ROD_MASS = 0.05
 # Default absolute nominal connector rod length.
-CONNECTOR_ROD_LENGTH = 0.2886751345948129
+CONNECTOR_ROD_LENGTH = 0.2032
 # Inertial mass assigned to each realistic triangle body shell.
 TRIANGLE_BODY_MASS = 0.01
 # Gravity compensation applied to realistic triangle body shells.
 TRIANGLE_BODY_GRAVCOMP = 1.0
 # Proportional gain for hinge position actuators that orient connector rods.
-HINGE_POSITION_KP = 10.0
+HINGE_POSITION_KP = 45.0
 # Passive damping on hinge joints that orient connector rods.
-HINGE_DAMPING = 1.0
+HINGE_DAMPING = 0.75
 # Force limits for hinge position actuators.
-HINGE_FORCE_RANGE = [-100.0, 100.0]
+HINGE_FORCE_RANGE = [-50.0, 50.0]
 # Control angle limits for hinge position actuators, in radians.
 HINGE_CTRL_RANGE = [-3.141592653589793, 3.141592653589793]
 # MuJoCo solref values for connector rod-to-ball equality constraints.
@@ -41,11 +41,11 @@ CONNECT_CONSTRAINT_SOLREF = [0.01, 1.0]
 # MuJoCo solimp values for connector rod-to-ball equality constraints.
 CONNECT_CONSTRAINT_SOLIMP = [0.95, 0.99, 0.001, 0.5, 2.0]
 # Collision type mask assigned to generated truss geoms.
-GEOM_CONTACT_TYPE = 0
+GEOM_CONTACT_TYPE = 1
 # Collision affinity mask assigned to generated truss geoms.
 GEOM_CONTACT_AFFINITY = 1
 # Default min/max length range for structural edge tendons.
-DEFAULT_EDGE_TENDON_RANGE = [0.5, 2.0]
+DEFAULT_EDGE_TENDON_RANGE = [0.2, 2.0]
 # Default min/max length range for non-actuated route tendons.
 DEFAULT_ROUTE_TENDON_RANGE = [0.5, 10.0]
 # Visual width of structural edge tendons.
