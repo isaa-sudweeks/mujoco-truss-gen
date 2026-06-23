@@ -41,6 +41,7 @@ from mujoco_truss_gen.mujoco_model import presets as preset_module
 from mujoco_truss_gen.mujoco_model.constants import (
     ACTIVE_NODE_MASS,
     ACTUATOR_CTRL_RANGE,
+    DEFAULT_EDGE_TENDON_RANGE,
     EDGE_TENDON_WIDTH,
     GEOM_CONTACT_AFFINITY,
     GEOM_CONTACT_TYPE,
@@ -832,7 +833,10 @@ def test_scaled_abstract_preset_keeps_control_values_unscaled() -> None:
 
     tendon = root.find(".//tendon/spatial[@name='tendon_node_1_node_2']")
     assert tendon is not None
-    np.testing.assert_allclose(_xml_vector(tendon.get("range", "")), [0.5, 5.0])
+    np.testing.assert_allclose(
+        _xml_vector(tendon.get("range", "")),
+        [DEFAULT_EDGE_TENDON_RANGE[0], 5.0],
+    )
 
     actuator = root.find(".//actuator/general[@name='act_12']")
     assert actuator is not None
@@ -848,7 +852,10 @@ def test_scaled_realistic_preset_scales_edge_tendon_upper_range() -> None:
 
     tendon = root.find(".//tendon/spatial[@name='tendon_node_1_node_2']")
     assert tendon is not None
-    np.testing.assert_allclose(_xml_vector(tendon.get("range", "")), [0.5, 5.0])
+    np.testing.assert_allclose(
+        _xml_vector(tendon.get("range", "")),
+        [DEFAULT_EDGE_TENDON_RANGE[0], 5.0],
+    )
 
 
 def test_env_domain_randomization_model_factory_rebuilds_on_reset() -> None:
@@ -1176,7 +1183,10 @@ def test_physical_parameters_override_generated_truss_values() -> None:
     assert float(passive_geom.get("mass", "nan")) == pytest.approx(0.44)
     assert float(active_geom.get("mass", "nan")) == pytest.approx(0.33)
     np.testing.assert_allclose(_xml_vector(active_geom.get("size", "")), [0.12])
-    np.testing.assert_allclose(_xml_vector(edge_tendon.get("range", "")), [0.5, 2.4])
+    np.testing.assert_allclose(
+        _xml_vector(edge_tendon.get("range", "")),
+        [params.default_edge_tendon_range[0], 2.4],
+    )
     assert float(edge_tendon.get("width", "nan")) == pytest.approx(0.08)
     assert float(perimeter_tendon.get("width", "nan")) == pytest.approx(0.002)
     np.testing.assert_allclose(_xml_vector(actuator.get("ctrlrange", "")), [-0.2, 0.2])
@@ -1561,9 +1571,19 @@ def test_realistic_routed_shape_clones_nodes_and_adds_bisector_controller() -> N
     }
     assert len(model.external_actuator_names) == 6
     assert all(not name.startswith("bisector_act_") for name in model.external_actuator_names)
+    tendon_ranges = {
+        spatial.get("name"): _xml_vector(spatial.get("range", ""))
+        for spatial in root.findall("./tendon/spatial")
+        if spatial.get("name", "").startswith("tendon_")
+    }
     for tendon_name, edge_length in model.get_edge_length_dict().items():
         if tendon_name.startswith("tendon_"):
-            assert edge_length == pytest.approx(1.0, abs=0.05)
+            lower, upper = tendon_ranges[tendon_name]
+            assert lower < edge_length < upper
+            assert upper == pytest.approx(
+                edge_length * TrussPhysicalParameters().tendon_range_max_factor,
+                rel=2e-5,
+            )
 
 
 def test_realistic_routed_passive_cylinders_face_connector_rods() -> None:
