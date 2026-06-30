@@ -159,9 +159,10 @@ compiled workloads.
 
 ### 9. No performance regression coverage
 
-Tests validate model behavior but do not check:
+MJX conversion coverage now verifies every canonical abstract preset and a
+representative simulator state. The remaining tests do not check:
 
-- MJX conversion of every preset.
+- MJX conversion of realistic presets, pending the contact-filtering work.
 - Batched stepping.
 - Contact counts.
 - Controller cost.
@@ -173,7 +174,11 @@ remain undetected.
 
 ## Recommended implementation order
 
-1. Add collision groups and exclusions, plus MJX conversion tests.
+1. MJX compatibility and collision configuration:
+   - [x] Add MJX model-conversion tests for every canonical abstract preset.
+   - [x] Add a representative MuJoCo-to-MJX state-conversion test.
+   - [ ] Add collision groups and exclusions.
+   - [ ] Extend MJX conversion tests to realistic presets after contact filtering.
 2. Define a functional, batched accelerator environment API.
 3. Port or eliminate the Python angle-bisector controller.
 4. Cache all static model metadata and vectorize observations and rewards.
