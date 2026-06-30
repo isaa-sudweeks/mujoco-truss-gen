@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from mujoco_truss_gen.base_env import (
     DomainRandomizationConfig,
     MujocoTrussEnv,
@@ -44,11 +46,30 @@ from mujoco_truss_gen.node_velocity_command_env import MujocoNodeVelocityCommand
 from mujoco_truss_gen.relative_observation_env import MujocoRelativeObsEnv
 from mujoco_truss_gen.velocity_command_env import MujocoVelocityCommandEnv
 
+if TYPE_CHECKING:
+    from mujoco_truss_gen.mjx_env import MjxEnvState, MjxNodeVelocityEnv
+
+
+def __getattr__(name: str) -> Any:
+    if name in {"MjxEnvState", "MjxNodeVelocityEnv"}:
+        from mujoco_truss_gen.mjx_env import MjxEnvState, MjxNodeVelocityEnv
+
+        exports = {
+            "MjxEnvState": MjxEnvState,
+            "MjxNodeVelocityEnv": MjxNodeVelocityEnv,
+        }
+        globals().update(exports)
+        return exports[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "AccelerometerConfig",
     "DEFAULT_ACCELEROMETER_CONFIG",
     "DomainRandomizationConfig",
     "MujocoModel",
+    "MjxEnvState",
+    "MjxNodeVelocityEnv",
     "MujocoNodeVelocityCommandEnv",
     "MujocoRelativeObsEnv",
     "MujocoTrussEnv",

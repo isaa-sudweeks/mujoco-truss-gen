@@ -179,7 +179,7 @@ remain undetected.
    - [x] Add a representative MuJoCo-to-MJX state-conversion test.
    - [ ] Add collision groups and exclusions.
    - [ ] Extend MJX conversion tests to realistic presets after contact filtering.
-2. Define a functional, batched accelerator environment API.
+2. [x] Define a functional, batched accelerator environment API.
 3. Port or eliminate the Python angle-bisector controller.
 4. Cache all static model metadata and vectorize observations and rewards.
 5. Reduce realistic model degrees of freedom and constraints.

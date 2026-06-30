@@ -207,6 +207,55 @@ isoperimetric robot task.
 Custom tasks should subclass an environment and override `_get_obs()`,
 `_compute_reward()`, `reset()`, or `step()` as needed.
 
+## Batched MJX Environment
+
+`MjxNodeVelocityEnv` provides a pure, batch-native accelerator path for abstract
+truss models. It preserves the node-velocity action, observation, reward, and
+episode semantics described above, but uses explicit JAX state and random keys
+instead of the mutable Gymnasium interface. Every input and output has a leading
+batch dimension.
+
+```python
+import jax
+import jax.numpy as jnp
+
+from mujoco_truss_gen import MjxNodeVelocityEnv, TrussEnvConfig, get_mujoco_spec
+
+env = MjxNodeVelocityEnv(
+    TrussEnvConfig(
+        get_mujoco_spec("tetrahedron", realistic=False),
+        max_steps=1_000,
+        nsubsteps=2,
+        speed=0.01,
+    )
+)
+
+batch_size = 256
+reset = jax.jit(env.reset)
+step = jax.jit(env.step)
+reset_where = jax.jit(env.reset_where)
+
+keys = jax.random.split(jax.random.key(0), batch_size)
+obs, state = reset(keys)
+
+step_keys = jax.random.split(jax.random.key(1), batch_size)
+actions = jnp.zeros((batch_size, env.action_size), dtype=jnp.float32)
+obs, state, reward, done, info = step(step_keys, state, actions)
+
+reset_keys = jax.random.split(jax.random.key(2), batch_size)
+obs, state = reset_where(reset_keys, state, done)
+```
+
+`done` is the elementwise union of task termination and time-limit truncation;
+the separate boolean arrays are available as `info["terminated"]` and
+`info["truncated"]`. Completed environments are not reset automatically.
+
+The first accelerator implementation intentionally supports one fixed abstract
+model per environment instance. Models requiring angle-bisector/internal
+control, rendering, domain randomization, and batches containing different
+model shapes are not supported yet. A different batch size can be used, but it
+causes JAX to compile a separate executable.
+
 ## Rendering
 
 - `render_mode="rgb_array"` returns a rendered NumPy RGB image.
