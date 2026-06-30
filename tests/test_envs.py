@@ -990,15 +990,28 @@ def test_generated_spec_uses_firehose_steel_and_black_materials() -> None:
     )
 
 
-def test_realistic_generated_node_geoms_have_peer_contacts_enabled() -> None:
+def test_realistic_generated_node_geoms_use_ground_only_contacts() -> None:
     model = get_mujoco_spec("octahedron", realistic=True).compile()
+    robot_geom_ids = []
 
     for body_name in ("node_1", "node_2", "connector_ball_node_1"):
         body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
         assert body_id != -1
         geom_id = int(model.body_geomadr[body_id])
+        robot_geom_ids.append(geom_id)
         assert int(model.geom_contype[geom_id]) == GEOM_CONTACT_TYPE
         assert int(model.geom_conaffinity[geom_id]) == GEOM_CONTACT_AFFINITY
+
+    ground_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "ground")
+    assert ground_id >= 0
+    for geom_id in robot_geom_ids:
+        assert int(model.geom_contype[ground_id]) & int(model.geom_conaffinity[geom_id])
+
+    geom_a, geom_b = robot_geom_ids[:2]
+    assert not (
+        int(model.geom_contype[geom_a]) & int(model.geom_conaffinity[geom_b])
+        or int(model.geom_contype[geom_b]) & int(model.geom_conaffinity[geom_a])
+    )
 
 
 def test_realistic_spec_adds_accelerometers_to_each_generated_node() -> None:

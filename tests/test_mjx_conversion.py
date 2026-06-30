@@ -52,6 +52,17 @@ def test_abstract_preset_model_converts_to_mjx(preset_name: str) -> None:
         assert getattr(mjx_model, array_name).shape == getattr(mujoco_model, array_name).shape
 
 
+@pytest.mark.parametrize("preset_name", CANONICAL_PRESET_NAMES)
+def test_realistic_preset_model_converts_to_mjx(preset_name: str) -> None:
+    mujoco_model = get_mujoco_spec(preset_name, realistic=True).compile()
+
+    mjx_model = mjx.put_model(mujoco_model)
+
+    assert mjx_model.nq == mujoco_model.nq
+    assert mjx_model.nu == mujoco_model.nu
+    assert mjx_model.ngeom == mujoco_model.ngeom
+
+
 def test_abstract_preset_state_converts_to_mjx() -> None:
     mujoco_model = get_mujoco_spec("tetrahedron", realistic=False).compile()
     mujoco_data = mujoco.MjData(mujoco_model)

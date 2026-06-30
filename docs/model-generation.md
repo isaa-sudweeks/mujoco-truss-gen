@@ -227,6 +227,10 @@ quit
   `realistic=True` path is still incomplete and should be treated as a known
   modeling limitation until the routed connector/body geometry is fixed.
 
+Generated robot geoms collide with the ground but not with one another. This
+ground-only profile avoids redundant internal contacts and is compatible with
+MJX's supported collision pairs.
+
 Realistic triangle models include one accelerometer sensor per generated node
 site by default. Pass `accelerometer_config=AccelerometerConfig(...)` to
 configure sensor fields such as `noise`, `cutoff`, `nsample`, `delay`, or

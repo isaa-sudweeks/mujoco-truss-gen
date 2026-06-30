@@ -250,11 +250,20 @@ obs, state = reset_where(reset_keys, state, done)
 the separate boolean arrays are available as `info["terminated"]` and
 `info["truncated"]`. Completed environments are not reset automatically.
 
-The first accelerator implementation intentionally supports one fixed abstract
-model per environment instance. Models requiring angle-bisector/internal
-control, rendering, domain randomization, and batches containing different
-model shapes are not supported yet. A different batch size can be used, but it
-causes JAX to compile a separate executable.
+The accelerator environment supports one fixed abstract or generated realistic
+model per instance. Realistic angle-bisector controls are evaluated as batched
+JAX operations before every MJX physics substep. Other internal actuator types,
+rendering, domain randomization, and batches containing different model shapes
+are not supported yet. A different batch size can be used, but it causes JAX to
+compile a separate executable.
+
+Generated truss geoms use ground-only collision masks: robot-ground contact is
+preserved, while internal robot-robot contacts are disabled. Warm JIT throughput
+can be measured without imposing a hardware-specific test threshold:
+
+```bash
+python experiments/benchmark_mjx_env.py --preset tetrahedron --batch-sizes 1,64,256
+```
 
 ## Rendering
 

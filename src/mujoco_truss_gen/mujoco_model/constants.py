@@ -40,9 +40,10 @@ HINGE_CTRL_RANGE = [-3.141592653589793, 3.141592653589793]
 CONNECT_CONSTRAINT_SOLREF = [0.01, 1.0]
 # MuJoCo solimp values for connector rod-to-ball equality constraints.
 CONNECT_CONSTRAINT_SOLIMP = [0.95, 0.99, 0.001, 0.5, 2.0]
-# Collision type mask assigned to generated truss geoms.
-GEOM_CONTACT_TYPE = 1
-# Collision affinity mask assigned to generated truss geoms.
+# Generated truss geoms do not initiate contacts with one another. The ground
+# retains MuJoCo's default type bit, which is accepted by this affinity mask.
+GEOM_CONTACT_TYPE = 0
+# Collision affinity mask assigned to generated truss geoms (ground-only).
 GEOM_CONTACT_AFFINITY = 1
 # Default min/max length range for structural edge tendons.
 DEFAULT_EDGE_TENDON_RANGE = [0.2, 2.0]

@@ -47,14 +47,17 @@ from mujoco_truss_gen.relative_observation_env import MujocoRelativeObsEnv
 from mujoco_truss_gen.velocity_command_env import MujocoVelocityCommandEnv
 
 if TYPE_CHECKING:
+    from mujoco_truss_gen.mjx_controllers import MjxAngleBisectorController
     from mujoco_truss_gen.mjx_env import MjxEnvState, MjxNodeVelocityEnv
 
 
 def __getattr__(name: str) -> Any:
-    if name in {"MjxEnvState", "MjxNodeVelocityEnv"}:
+    if name in {"MjxAngleBisectorController", "MjxEnvState", "MjxNodeVelocityEnv"}:
+        from mujoco_truss_gen.mjx_controllers import MjxAngleBisectorController
         from mujoco_truss_gen.mjx_env import MjxEnvState, MjxNodeVelocityEnv
 
         exports = {
+            "MjxAngleBisectorController": MjxAngleBisectorController,
             "MjxEnvState": MjxEnvState,
             "MjxNodeVelocityEnv": MjxNodeVelocityEnv,
         }
@@ -74,6 +77,7 @@ __all__ = [
     "MujocoRelativeObsEnv",
     "MujocoTrussEnv",
     "MujocoVelocityCommandEnv",
+    "MjxAngleBisectorController",
     "NodeVelocityController",
     "PRESETS",
     "HENNEBERG_PRESET_SPECS",

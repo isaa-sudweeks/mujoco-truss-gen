@@ -10,6 +10,7 @@ import numpy as np
 from mujoco import mjx
 
 from mujoco_truss_gen.base_env import TrussEnvConfig, _coerce_config
+from mujoco_truss_gen.mjx_controllers import MjxAngleBisectorController
 from mujoco_truss_gen.mujoco_model.controllers import NodeVelocityController
 from mujoco_truss_gen.mujoco_model.model import ModelSource, MujocoModel
 
@@ -45,10 +46,20 @@ class MjxNodeVelocityEnv:
 
         self.mujoco_model = MujocoModel(self.config.model_source)
         model = self.mujoco_model.model
-        if self.mujoco_model.internal_actuator_ids.size:
+        self._angle_bisector_controller = MjxAngleBisectorController(
+            self.mujoco_model.angle_bisector_controller.targets
+        )
+        unsupported_internal_actuators = (
+            set(self.mujoco_model.internal_actuator_ids.tolist())
+            - self._angle_bisector_controller.actuator_ids
+        )
+        if unsupported_internal_actuators:
+            names = [
+                model.actuator(actuator_id).name for actuator_id in unsupported_internal_actuators
+            ]
             raise ValueError(
-                "MjxNodeVelocityEnv does not yet support models that require "
-                "angle-bisector or other internal actuators; use an abstract model."
+                "MjxNodeVelocityEnv does not support internal actuator(s) not owned by "
+                f"the angle-bisector controller: {', '.join(sorted(names))}."
             )
 
         self._controller = NodeVelocityController(
@@ -103,17 +114,29 @@ class MjxNodeVelocityEnv:
         self._position_scale = float(max(self.mujoco_model.initial_bounding_box_diagonal, 1e-8))
         self._initial_critical_eig = float(self.mujoco_model.initial_critical_eig)
 
-        node_index = {
-            node_name: index for index, node_name in enumerate(self.mujoco_model.node_names)
+        if self.mujoco_model._uses_realistic_connector_balls():
+            rigidity_node_names, _, rigidity_edges_by_name, rigidity_axis_indices = (
+                self.mujoco_model._logical_rigidity_graph()
+            )
+        else:
+            rigidity_node_names = self.mujoco_model.node_names
+            rigidity_edges_by_name = self.mujoco_model.structural_edges
+            rigidity_axis_indices = self.mujoco_model.axis_indices
+
+        rigidity_node_index = {
+            node_name: index for index, node_name in enumerate(rigidity_node_names)
         }
         rigidity_edges = [
-            (node_index[node_a], node_index[node_b])
-            for node_a, node_b in self.mujoco_model.structural_edges
-            if node_a in node_index and node_b in node_index and node_a != node_b
+            (rigidity_node_index[node_a], rigidity_node_index[node_b])
+            for node_a, node_b in rigidity_edges_by_name
+            if node_a in rigidity_node_index and node_b in rigidity_node_index and node_a != node_b
         ]
         self._rigidity_edge_a = jnp.asarray([edge[0] for edge in rigidity_edges], dtype=jnp.int32)
         self._rigidity_edge_b = jnp.asarray([edge[1] for edge in rigidity_edges], dtype=jnp.int32)
-        self._axis_indices = jnp.asarray(self.mujoco_model.axis_indices, dtype=jnp.int32)
+        self._axis_indices = jnp.asarray(rigidity_axis_indices, dtype=jnp.int32)
+        self._rigidity_body_ids, self._rigidity_body_mask = self._rigidity_body_metadata(
+            rigidity_node_names
+        )
 
         reset_actuator_ids = np.array(
             [
@@ -213,6 +236,7 @@ class MjxNodeVelocityEnv:
             ctrl=jnp.zeros_like(self._data_template.ctrl),
         )
         data = mjx.forward(self.mjx_model, data)
+        data = self._angle_bisector_controller.initialize(data)
         if self._reset_act_adrs.size:
             act = data.act.at[self._reset_act_adrs].set(data.ten_length[self._reset_tendon_ids])
             data = data.replace(act=act)
@@ -234,12 +258,12 @@ class MjxNodeVelocityEnv:
 
         ctrl = state.data.ctrl.at[self._actuator_ids].set(edge_commands)
         data = state.data.replace(ctrl=ctrl)
-        data = jax.lax.fori_loop(
-            0,
-            int(self.config.nsubsteps),
-            lambda _index, loop_data: mjx.step(self.mjx_model, loop_data),
-            data,
-        )
+
+        def physics_substep(_index: int, loop_data: mjx.Data) -> mjx.Data:
+            loop_data = self._angle_bisector_controller.update(loop_data)
+            return mjx.step(self.mjx_model, loop_data)
+
+        data = jax.lax.fori_loop(0, int(self.config.nsubsteps), physics_substep, data)
 
         step_count = state.step_count + jnp.asarray(1, dtype=state.step_count.dtype)
         next_state = MjxEnvState(
@@ -375,14 +399,18 @@ class MjxNodeVelocityEnv:
 
     def _critical_eig(self, data: mjx.Data) -> jax.Array:
         dims = int(self._axis_indices.size)
-        node_count = int(self._node_body_ids.size)
+        node_count = int(self._rigidity_body_ids.shape[0])
         edge_count = int(self._rigidity_edge_a.size)
         rigid_body_modes = dims + (dims * (dims - 1)) // 2
         matrix_width = node_count * dims
         if edge_count == 0 or matrix_width <= rigid_body_modes:
             return jnp.asarray(0.0)
 
-        positions = data.xpos[self._node_body_ids][:, self._axis_indices]
+        body_positions = data.xpos[self._rigidity_body_ids]
+        mask = self._rigidity_body_mask[..., None]
+        positions = jnp.sum(jnp.where(mask, body_positions, 0.0), axis=1)
+        positions = positions / jnp.maximum(jnp.sum(mask, axis=1), 1.0)
+        positions = positions[:, self._axis_indices]
         delta = positions[self._rigidity_edge_b] - positions[self._rigidity_edge_a]
         lengths = jnp.linalg.norm(delta, axis=1)
         degenerate = lengths < 1e-8
@@ -409,6 +437,37 @@ class MjxNodeVelocityEnv:
         velocities = data.cvel[self._node_body_ids, 3:]
         contact_mask = positions[:, 2] < float(self.config.slip_height)
         return jnp.sum(jnp.where(contact_mask, jnp.abs(velocities[:, 0]), 0.0))
+
+    def _rigidity_body_metadata(
+        self,
+        rigidity_node_names: list[str],
+    ) -> tuple[jax.Array, jax.Array]:
+        model = self.mujoco_model.model
+        body_ids_by_node: list[list[int]] = []
+        for logical_name in rigidity_node_names:
+            connector_id = mujoco.mj_name2id(
+                model,
+                mujoco.mjtObj.mjOBJ_BODY,
+                f"connector_ball_{logical_name}",
+            )
+            if connector_id >= 0:
+                body_ids_by_node.append([connector_id])
+                continue
+
+            physical_ids = [
+                self.mujoco_model.node_body_ids[node_name]
+                for node_name in self.mujoco_model.node_names
+                if self.mujoco_model._logical_node_name(node_name) == logical_name
+            ]
+            body_ids_by_node.append(physical_ids)
+
+        max_instances = max(1, *(len(body_ids) for body_ids in body_ids_by_node))
+        body_ids = np.zeros((len(body_ids_by_node), max_instances), dtype=np.int32)
+        body_mask = np.zeros_like(body_ids, dtype=bool)
+        for index, node_body_ids in enumerate(body_ids_by_node):
+            body_ids[index, : len(node_body_ids)] = node_body_ids
+            body_mask[index, : len(node_body_ids)] = True
+        return jnp.asarray(body_ids), jnp.asarray(body_mask)
 
     @staticmethod
     def _key_batch_size(keys: jax.Array) -> int:

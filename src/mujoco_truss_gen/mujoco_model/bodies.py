@@ -34,7 +34,7 @@ def find_original_node(node_instances: dict[str, list[str]], instance_name: str)
     return None
 
 
-def disable_geom_contacts(geom: Any) -> None:
+def enable_ground_only_contacts(geom: Any) -> None:
     geom.contype = GEOM_CONTACT_TYPE
     geom.conaffinity = GEOM_CONTACT_AFFINITY
 
@@ -60,7 +60,7 @@ def add_planar_node_body(
     )
     if connector_direction is not None:
         node_geom.quat = _face_normal_quat(connector_direction)
-    disable_geom_contacts(node_geom)
+    enable_ground_only_contacts(node_geom)
 
     if index == 1:
         node_body.add_joint(
@@ -127,7 +127,7 @@ def add_routed_node_body(
         )
         if connector_direction is not None:
             node_geom.quat = _face_normal_quat(connector_direction, hinge_axis)
-    disable_geom_contacts(node_geom)
+    enable_ground_only_contacts(node_geom)
 
     for suffix, axis in (
         ("x", [1.0, 0.0, 0.0]),
@@ -367,7 +367,7 @@ def add_free_node_body(
         material=NODE_MATERIAL,
         mass=params.node_mass,
     )
-    disable_geom_contacts(node_geom)
+    enable_ground_only_contacts(node_geom)
     return node_body
 
 
@@ -444,7 +444,7 @@ def create_connector_balls(
             material=NODE_MATERIAL,
             mass=params.connector_mass,
         )
-        disable_geom_contacts(ball_geom)
+        enable_ground_only_contacts(ball_geom)
 
         for axis in ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]):
             ball.add_joint(type=mujoco.mjtJoint.mjJNT_SLIDE, axis=axis)
@@ -479,7 +479,7 @@ def connect_node_to_ball(
         material=ROD_MATERIAL,
         mass=params.rod_mass,
     )
-    disable_geom_contacts(rod_geom)
+    enable_ground_only_contacts(rod_geom)
 
     actuator = spec.add_actuator(
         name=angle_bisector_actuator_name(instance_name),
@@ -529,7 +529,7 @@ def connect_routed_node_to_ball(
         material=ROD_MATERIAL,
         mass=params.rod_mass,
     )
-    disable_geom_contacts(rod_geom)
+    enable_ground_only_contacts(rod_geom)
 
     actuator = spec.add_actuator(
         name=angle_bisector_actuator_name(instance_name),

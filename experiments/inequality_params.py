@@ -12,7 +12,12 @@ import numpy as np
 from mujoco import mjx
 from scipy.linalg import null_space
 
-from mujoco_truss_gen import MujocoModel, NodeVelocityController, get_mujoco_spec
+from mujoco_truss_gen import (
+    MjxAngleBisectorController,
+    MujocoModel,
+    NodeVelocityController,
+    get_mujoco_spec,
+)
 from mujoco_truss_gen.mujoco_model.tendons import initialize_actuator_lengths
 
 DEFAULT_SPEED = 0.05
@@ -163,114 +168,9 @@ class TetrahedronSimulation:
         edge_rows = jnp.arange(len(structural_edges))[:, None]
         coordinate_indices = jnp.arange(3)[None, :]
         mjx_model = mjx.put_model(self.model)
-        angle_targets = self.truss.angle_bisector_controller.targets
-
-        def unit_vector(vector: Any) -> Any:
-            return vector / jnp.maximum(jnp.linalg.norm(vector), 1e-10)
-
-        def signed_angle_about_axis(from_vector: Any, to_vector: Any, axis: Any) -> Any:
-            axis = unit_vector(axis)
-            from_projected = from_vector - axis * jnp.dot(from_vector, axis)
-            to_projected = to_vector - axis * jnp.dot(to_vector, axis)
-            from_projected = unit_vector(from_projected)
-            to_projected = unit_vector(to_projected)
-            signed_cross = jnp.dot(axis, jnp.cross(from_projected, to_projected))
-            dot = jnp.clip(jnp.dot(from_projected, to_projected), -1.0, 1.0)
-            return jnp.arctan2(signed_cross, dot)
-
-        def rotate_about_axis(vector: Any, axis: Any, angle: Any) -> Any:
-            axis = unit_vector(axis)
-            cosine = jnp.cos(angle)
-            return (
-                vector * cosine
-                + jnp.cross(axis, vector) * jnp.sin(angle)
-                + axis * jnp.dot(axis, vector) * (1.0 - cosine)
-            )
-
-        def apply_angle_bisector_control(data: Any) -> Any:
-            ctrl = data.ctrl
-            for target in angle_targets:
-                node_position = data.site_xpos[target.node_site_id]
-                neighbor_site_ids = target.neighbor_site_ids
-                if len(neighbor_site_ids) == 2 and len(target.neighbor_candidate_site_ids) >= 2:
-                    candidate_ids = jnp.asarray(target.neighbor_candidate_site_ids)
-                    candidate_positions = data.site_xpos[candidate_ids]
-                    distances = jnp.linalg.norm(candidate_positions - node_position, axis=1)
-                    nearest = jnp.argsort(distances)[:2]
-                    neighbor_positions = candidate_positions[nearest]
-                else:
-                    neighbor_positions = data.site_xpos[jnp.asarray(neighbor_site_ids)]
-
-                plane_normal_world = None
-                if len(neighbor_site_ids) == 1:
-                    target_world = unit_vector(node_position - neighbor_positions[0])
-                else:
-                    direction_a = unit_vector(neighbor_positions[0] - node_position)
-                    direction_b = unit_vector(neighbor_positions[1] - node_position)
-                    target_world = -unit_vector(direction_a + direction_b)
-                    plane_normal_world = unit_vector(jnp.cross(direction_a, direction_b))
-
-                parent_xmat = data.xmat[target.parent_body_id].reshape(3, 3)
-                target_parent = parent_xmat.T @ target_world
-                hinge_axis = jnp.asarray(target.hinge_axis)
-                initial_rod_vector = jnp.asarray(target.initial_rod_vector)
-                angle = signed_angle_about_axis(
-                    initial_rod_vector,
-                    target_parent,
-                    hinge_axis,
-                )
-                ctrl = ctrl.at[target.actuator_id].set(angle)
-
-                if target.angular_actuator_id is None or target.angular_hinge_axis is None:
-                    continue
-
-                angular_hinge_axis = jnp.asarray(target.angular_hinge_axis)
-                yawed_rod = rotate_about_axis(initial_rod_vector, hinge_axis, angle)
-                yawed_angular_axis = rotate_about_axis(angular_hinge_axis, hinge_axis, angle)
-                angular_angle = signed_angle_about_axis(
-                    yawed_rod,
-                    target_parent,
-                    yawed_angular_axis,
-                )
-                ctrl = ctrl.at[target.angular_actuator_id].set(angular_angle)
-
-                if (
-                    target.roll_actuator_id is None
-                    or target.roll_hinge_axis is None
-                    or plane_normal_world is None
-                ):
-                    continue
-
-                target_normal_parent = parent_xmat.T @ plane_normal_world
-                rolled_axis = rotate_about_axis(
-                    jnp.asarray(target.roll_hinge_axis),
-                    hinge_axis,
-                    angle,
-                )
-                rolled_axis = rotate_about_axis(
-                    rolled_axis,
-                    yawed_angular_axis,
-                    angular_angle,
-                )
-                rolled_normal = rotate_about_axis(hinge_axis, hinge_axis, angle)
-                rolled_normal = rotate_about_axis(
-                    rolled_normal,
-                    yawed_angular_axis,
-                    angular_angle,
-                )
-                target_normal_parent = jnp.where(
-                    jnp.dot(rolled_normal, target_normal_parent) < 0.0,
-                    -target_normal_parent,
-                    target_normal_parent,
-                )
-                roll_angle = signed_angle_about_axis(
-                    rolled_normal,
-                    target_normal_parent,
-                    rolled_axis,
-                )
-                ctrl = ctrl.at[target.roll_actuator_id].set(roll_angle)
-
-            return data.replace(ctrl=ctrl)
+        angle_bisector_controller = MjxAngleBisectorController(
+            self.truss.angle_bisector_controller.targets
+        )
 
         def critical_eigenvalue(data: Any) -> Any:
             positions = data.xpos[connector_body_ids]
@@ -302,7 +202,7 @@ class TetrahedronSimulation:
                 ctrlrange[:, 1],
             )
             for _ in range(MJX_GRADIENT_ROLLOUT_STEPS):
-                data = apply_angle_bisector_control(data)
+                data = angle_bisector_controller.update(data)
                 data = data.replace(ctrl=data.ctrl.at[actuator_ids].set(edge_commands))
                 data = mjx.step(mjx_model, data)
             return critical_eigenvalue(data)

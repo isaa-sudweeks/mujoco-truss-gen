@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -259,17 +261,72 @@ def test_mjx_nonfinite_terminal_diagnostics_keep_reward_finite(
     assert np.isfinite(np.asarray(reward))
 
 
-def test_mjx_env_rejects_unsupported_configuration_and_models() -> None:
+def test_mjx_env_rejects_unsupported_configuration_and_models(tmp_path: Path) -> None:
     spec = get_mujoco_spec("tetrahedron", realistic=False)
     with pytest.raises(ValueError, match="DomainRandomizationConfig"):
         MjxNodeVelocityEnv(TrussEnvConfig(spec, domain_randomization=DomainRandomizationConfig()))
 
-    with pytest.raises(ValueError, match="internal actuators"):
-        MjxNodeVelocityEnv(get_mujoco_spec("tetrahedron", realistic=True))
+    root = ET.fromstring(spec.to_xml())
+    actuator = root.find("actuator")
+    assert actuator is not None
+    ET.SubElement(
+        actuator,
+        "general",
+        name="bisector_act_unknown",
+        joint="node_1_x",
+        ctrlrange="-1 1",
+    )
+    model_path = tmp_path / "unsupported_internal.xml"
+    model_path.write_text(ET.tostring(root, encoding="unicode"), encoding="utf-8")
+    with pytest.raises(ValueError, match="not owned"):
+        MjxNodeVelocityEnv(model_path)
 
     compiled_model_without_xml_metadata = get_mujoco_spec("tetrahedron", realistic=False).compile()
     with pytest.raises(ValueError, match="control-graph metadata"):
         MjxNodeVelocityEnv(compiled_model_without_xml_metadata)
+
+
+def test_realistic_mjx_env_jitted_rollout_and_cpu_diagnostics_match() -> None:
+    config = TrussEnvConfig(
+        get_mujoco_spec("tetrahedron", realistic=True),
+        max_steps=2,
+        nsubsteps=1,
+        speed=0.01,
+    )
+    env = MjxNodeVelocityEnv(config)
+    keys = _keys(20)
+    initial_obs, state = jax.jit(env.reset)(keys)
+
+    assert initial_obs.shape == (2, env.observation_size)
+    assert np.all(np.isfinite(np.asarray(state.data.ctrl)))
+    assert env._angle_bisector_controller.enabled
+
+    actions = jnp.zeros((2, env.action_size), dtype=jnp.float32)
+    obs, stepped_state, reward, done, info = jax.jit(env.step)(keys, state, actions)
+    assert obs.shape == (2, env.observation_size)
+    assert reward.shape == (2,)
+    assert done.shape == (2,)
+    assert all(value.shape == (2,) for value in info.values())
+    assert np.all(np.isfinite(np.asarray(stepped_state.data.qpos)))
+    assert np.all(np.isfinite(np.asarray(stepped_state.data.ctrl)))
+
+    cpu_env = MujocoNodeVelocityCommandEnv(config)
+    try:
+        cpu_env.mj_model.data = mjx.get_data(env.mujoco_model.model, state.data)[0]
+        np.testing.assert_allclose(initial_obs[0], cpu_env._get_obs(), rtol=1e-5, atol=1e-6)
+        expected_critical_eig = cpu_env.mj_model.collapse_check()
+        actual_critical_eig = env._critical_eig(jax.tree.map(lambda value: value[0], state.data))
+        assert float(actual_critical_eig) == pytest.approx(
+            expected_critical_eig, rel=1e-5, abs=1e-6
+        )
+    finally:
+        cpu_env.close()
+
+    reset_obs, reset_state = jax.jit(env.reset_where)(
+        _keys(21), stepped_state, jnp.array([True, False])
+    )
+    assert reset_obs.shape == (2, env.observation_size)
+    np.testing.assert_array_equal(reset_state.step_count, np.array([0, 1]))
 
 
 def test_mjx_env_validates_leading_batch_shapes(compiled_env: CompiledEnv) -> None:

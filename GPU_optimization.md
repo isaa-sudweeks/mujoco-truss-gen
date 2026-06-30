@@ -30,9 +30,10 @@ Consequences:
 The target architecture should use one compiled model replicated per GPU, with
 hundreds or thousands of environment states batched on each GPU.
 
-### 2. Realistic models currently fail MJX conversion
+### 2. Realistic model MJX conversion required collision filtering
 
-Every tested `realistic=True` preset failed `mjx.put_model()` with:
+Before ground-only collision filtering, every tested `realistic=True` preset
+failed `mjx.put_model()` with:
 
 ```text
 NotImplementedError: (mjGEOM_CYLINDER, mjGEOM_BOX) collisions not implemented.
@@ -41,10 +42,9 @@ NotImplementedError: (mjGEOM_CYLINDER, mjGEOM_BOX) collisions not implemented.
 This affects the tetrahedron, octahedron, icosahedron, and solar-array models.
 The corresponding abstract models converted successfully.
 
-The immediate cause is the combination of realistic box/cylinder geometry and
-unrestricted collision masks. After restricting robot collisions to ground-only,
-all four realistic models converted successfully, and a JIT-compiled realistic
-tetrahedron MJX step ran successfully.
+Generated robot geoms now use ground-only collision masks. Canonical realistic
+presets are covered by MJX conversion tests, and the environment runs a
+JIT-compiled, batched realistic tetrahedron step.
 
 ### 3. The Python angle-bisector controller dominates realistic stepping
 
@@ -65,7 +65,11 @@ Measured costs:
 For the tetrahedron, the controller is roughly 11 times more expensive than
 MuJoCo itself. It also cannot be batched or JIT-compiled in its current form.
 
-It should be replaced with either:
+The CPU environment retains this controller for MuJoCo execution. The MJX
+environment now uses a vectorized JAX implementation inside every accelerator
+physics substep, including angle continuity and routed-plane roll control.
+
+The remaining CPU optimization options are:
 
 - Native MuJoCo constraints or actuation, if the same behavior can be modeled
   physically; or
@@ -82,7 +86,7 @@ icosahedron. Restricting collisions to robot-ground contact reduced that to abou
 four and changed raw physics time from 3.72 ms to 0.204 ms: approximately an
 18-times improvement in `mj_step`, or 2.5 times for controller-plus-physics.
 
-The library needs deliberate collision groups and exclusions:
+Generated models now use a ground-only collision profile:
 
 - Preserve ground contact.
 - Disable collisions between directly connected components.
@@ -177,10 +181,10 @@ remain undetected.
 1. MJX compatibility and collision configuration:
    - [x] Add MJX model-conversion tests for every canonical abstract preset.
    - [x] Add a representative MuJoCo-to-MJX state-conversion test.
-   - [ ] Add collision groups and exclusions.
-   - [ ] Extend MJX conversion tests to realistic presets after contact filtering.
+   - [x] Add ground-only collision groups.
+   - [x] Extend MJX conversion tests to realistic presets after contact filtering.
 2. [x] Define a functional, batched accelerator environment API.
-3. Port or eliminate the Python angle-bisector controller.
+3. [x] Port the angle-bisector controller to vectorized JAX and integrate it into MJX.
 4. Cache all static model metadata and vectorize observations and rewards.
 5. Reduce realistic model degrees of freedom and constraints.
 6. Make rigidity and slip computation optional and batched.
