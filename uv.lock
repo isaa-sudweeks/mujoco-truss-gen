@@ -1306,7 +1306,7 @@ wheels = [
 
 [[package]]
 name = "mujoco-truss-gen"
-version = "0.10.1"
+version = "0.10.2"
 source = { editable = "." }
 dependencies = [
     { name = "gymnasium" },
