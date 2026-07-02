@@ -6,6 +6,7 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import mujoco
 import numpy as np
 import pytest
 from mujoco import mjx
@@ -13,6 +14,7 @@ from mujoco import mjx
 from mujoco_truss_gen import (
     PRESETS,
     DomainRandomizationConfig,
+    MjxEnvState,
     MjxNodeVelocityEnv,
     MujocoNodeVelocityCommandEnv,
     TrussEnvConfig,
@@ -57,6 +59,29 @@ def compiled_env() -> CompiledEnv:
 
 def _keys(seed: int, batch_size: int = 2) -> jax.Array:
     return jax.random.split(jax.random.key(seed), batch_size)
+
+
+def _record_allclose_failure(
+    failures: list[str],
+    label: str,
+    actual: object,
+    expected: object,
+    *,
+    rtol: float,
+    atol: float,
+) -> None:
+    actual_array = np.asarray(actual)
+    expected_array = np.asarray(expected)
+    if np.allclose(actual_array, expected_array, rtol=rtol, atol=atol, equal_nan=True):
+        return
+
+    absolute_error = np.abs(actual_array - expected_array)
+    allowed_error = atol + rtol * np.abs(expected_array)
+    failures.append(
+        f"{label}: max_abs_error={float(np.nanmax(absolute_error)):.6g}, "
+        f"max_tolerance_ratio={float(np.nanmax(absolute_error / allowed_error)):.6g} "
+        f"(rtol={rtol:g}, atol={atol:g})"
+    )
 
 
 @pytest.mark.parametrize("preset_name", CANONICAL_PRESET_NAMES)
@@ -197,6 +222,155 @@ def test_mjx_observation_and_reward_match_cpu_environment(
                 assert float(info[key][0]) == pytest.approx(expected_value, rel=1e-5, abs=1e-6)
     finally:
         cpu_env.close()
+
+
+@pytest.mark.parametrize("preset_name", ("tetrahedron", "octahedron"))
+def test_native_mujoco_and_mjx_contact_free_euler_rollouts_match(
+    preset_name: str,
+) -> None:
+    action_count = 4
+    config = TrussEnvConfig(
+        get_mujoco_spec(preset_name, realistic=False),
+        max_steps=action_count,
+        nsubsteps=2,
+        speed=0.01,
+    )
+    native_env = MujocoNodeVelocityCommandEnv(config)
+    mjx_env = MjxNodeVelocityEnv(config)
+
+    try:
+        native_env.reset(seed=2026)
+        native_model = native_env.mj_model.model
+        native_data = native_env.mj_model.data
+
+        # Run MJX from the exact native model and state rather than performing a
+        # separate MJX reset, which could introduce different random perturbations.
+        assert native_env.mj_model.xml == mjx_env.mujoco_model.xml
+        assert native_env.nsubsteps == mjx_env.config.nsubsteps
+        assert native_model.opt.timestep == pytest.approx(
+            mjx_env.mujoco_model.model.opt.timestep,
+            rel=0.0,
+            abs=0.0,
+        )
+        contact_disable_bit = int(mujoco.mjtDisableBit.mjDSBL_CONTACT)
+        native_model.opt.disableflags |= contact_disable_bit
+        # MJX and native MuJoCo use materially different implicitfast paths. Use
+        # their common explicit integrator to isolate contact-free dynamics parity.
+        native_model.opt.integrator = mujoco.mjtIntegrator.mjINT_EULER
+        mujoco.mj_forward(native_model, native_data)
+        assert len(native_data.contact) == 0
+        mjx_env.mjx_model = mjx.put_model(native_model)
+        assert int(mjx_env.mjx_model.opt.disableflags) & contact_disable_bit
+        assert int(mjx_env.mjx_model.opt.integrator) == int(mujoco.mjtIntegrator.mjINT_EULER)
+        mjx_data = mjx.put_data(native_model, native_data)
+        state = MjxEnvState(
+            data=jax.tree.map(lambda value: value[None, ...], mjx_data),
+            step_count=jnp.zeros((1,), dtype=jnp.int32),
+            node_commands=jnp.asarray(
+                native_env.node_velocity_controller.latest_node_commands[None, :]
+            ),
+        )
+
+        np.testing.assert_allclose(state.data.qpos[0], native_data.qpos, rtol=1e-6, atol=1e-7)
+        np.testing.assert_allclose(state.data.qvel[0], native_data.qvel, rtol=1e-6, atol=1e-7)
+        np.testing.assert_allclose(
+            mjx_env._get_obs(state)[0],
+            native_env._get_obs(),
+            rtol=1e-5,
+            atol=1e-6,
+        )
+
+        action_axis = np.linspace(-1.0, 1.0, mjx_env.action_size, dtype=np.float32)
+        actions = np.stack(
+            (
+                0.75 * config.speed * action_axis,
+                -0.5 * config.speed * action_axis,
+                0.25 * config.speed * np.sin(np.pi * action_axis),
+                np.zeros_like(action_axis),
+            )
+        ).astype(np.float32)
+        mjx_step = jax.jit(mjx_env.step)
+        failures: list[str] = []
+
+        for step_index, action in enumerate(actions, start=1):
+            native_obs, native_reward, native_terminated, native_truncated, _ = native_env.step(
+                action
+            )
+            mjx_obs, state, mjx_reward, mjx_done, mjx_info = mjx_step(
+                _keys(step_index, batch_size=1),
+                state,
+                jnp.asarray(action[None, :]),
+            )
+            assert len(native_data.contact) == 0
+            context = f"{preset_name=}, {step_index=}"
+
+            _record_allclose_failure(
+                failures,
+                f"qpos ({context})",
+                state.data.qpos[0],
+                native_data.qpos,
+                rtol=2e-3,
+                atol=2e-5,
+            )
+            _record_allclose_failure(
+                failures,
+                f"qvel ({context})",
+                state.data.qvel[0],
+                native_data.qvel,
+                rtol=2e-2,
+                atol=2e-4,
+            )
+            _record_allclose_failure(
+                failures,
+                f"observation ({context})",
+                mjx_obs[0],
+                native_obs,
+                rtol=2e-2,
+                atol=2e-4,
+            )
+            _record_allclose_failure(
+                failures,
+                f"reward ({context})",
+                mjx_reward[0],
+                native_reward,
+                rtol=2e-2,
+                atol=2e-4,
+            )
+            mjx_terminated = bool(mjx_info["terminated"][0])
+            mjx_truncated = bool(mjx_info["truncated"][0])
+            if mjx_terminated is not native_terminated:
+                failures.append(
+                    f"termination ({context}): MJX={mjx_terminated}, native={native_terminated}"
+                )
+            if mjx_truncated is not native_truncated:
+                failures.append(
+                    f"truncation ({context}): MJX={mjx_truncated}, native={native_truncated}"
+                )
+            if bool(mjx_done[0]) is not (native_terminated or native_truncated):
+                failures.append(
+                    f"done ({context}): MJX={bool(mjx_done[0])}, "
+                    f"native={native_terminated or native_truncated}"
+                )
+            _record_allclose_failure(
+                failures,
+                f"node controller output ({context})",
+                state.node_commands[0],
+                native_env.node_velocity_controller.latest_node_commands,
+                rtol=1e-6,
+                atol=1e-7,
+            )
+            _record_allclose_failure(
+                failures,
+                f"actuator controller output ({context})",
+                state.data.ctrl[0],
+                native_data.ctrl,
+                rtol=1e-4,
+                atol=1e-5,
+            )
+
+        assert not failures, "Native MuJoCo/MJX parity failures:\n" + "\n".join(failures)
+    finally:
+        native_env.close()
 
 
 def test_mjx_reset_where_only_resets_masked_elements(
