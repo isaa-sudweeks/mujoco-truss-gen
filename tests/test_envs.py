@@ -2167,6 +2167,11 @@ def test_get_networkx_graph_returns_named_control_graph_with_edge_types() -> Non
 
     assert "node_1" in graph.nodes
     assert "node_1_route_path_2_2" in graph.nodes
+    assert len(graph.nodes["node_1"]["pos3d"]) == 3
+    np.testing.assert_allclose(
+        graph.nodes["node_1"]["pos3d"],
+        graph.nodes["node_1"]["feature"][:3],
+    )
     edge_types = {edge_data["type"] for _, _, edge_data in graph.edges(data=True)}
     assert edge_types == {"actuated", "connector"}
     assert graph.has_edge("node_1", "node_1_route_path_2_2")
@@ -2189,6 +2194,39 @@ def test_view_graph_renders_without_showing_window() -> None:
         assert graph.number_of_nodes() == 12
         assert ax.get_title() == "Control graph"
         assert fig.axes == [ax]
+    finally:
+        plt.close(fig)
+
+
+def test_view_graph_renders_physical_layout_in_3d() -> None:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    fig, ax, graph = view_graph(
+        get_mujoco_spec("octahedron", realistic=False),
+        graph_view="control",
+        layout="physical",
+        dim=3,
+        show=False,
+    )
+
+    try:
+        assert graph.number_of_nodes() == 12
+        assert ax.name == "3d"
+        assert ax.get_xlabel() == "x"
+        assert ax.get_ylabel() == "y"
+        assert ax.get_zlabel() == "z"
+        assert fig.axes == [ax]
+
+        plotted_positions = np.column_stack(ax.collections[0]._offsets3d)
+        assert np.unique(np.round(plotted_positions, decimals=8), axis=0).shape[0] == 12
+
+        physical_positions = np.array(
+            [node_data["pos3d"] for _, node_data in graph.nodes(data=True)]
+        )
+        assert np.unique(np.round(physical_positions, decimals=8), axis=0).shape[0] == 6
     finally:
         plt.close(fig)
 

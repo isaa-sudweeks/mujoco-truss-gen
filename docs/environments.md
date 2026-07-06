@@ -252,10 +252,13 @@ the separate boolean arrays are available as `info["terminated"]` and
 
 The accelerator environment supports one fixed abstract or generated realistic
 model per instance. Realistic angle-bisector controls are evaluated as batched
-JAX operations before every MJX physics substep. Other internal actuator types,
-rendering, domain randomization, and batches containing different model shapes
-are not supported yet. A different batch size can be used, but it causes JAX to
-compile a separate executable.
+JAX operations before every MJX physics substep. Runtime
+`DomainRandomizationConfig` ranges are sampled independently per batched
+environment on reset and remain fixed for that episode; the sampled values are
+available on `state.domain_randomization`. `model_factory`, other internal
+actuator types, rendering, and batches containing different model shapes are not
+supported. A different batch size can be used, but it causes JAX to compile a
+separate executable.
 
 Generated truss geoms use ground-only collision masks: robot-ground contact is
 preserved, while internal robot-robot contacts are disabled. Warm JIT throughput
@@ -263,6 +266,7 @@ can be measured without imposing a hardware-specific test threshold:
 
 ```bash
 python experiments/benchmark_mjx_env.py --preset tetrahedron --batch-sizes 1,64,256
+python experiments/benchmark_mjx_env.py --preset tetrahedron --domain-randomization
 ```
 
 ## Rendering

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import jax
@@ -269,6 +269,9 @@ def test_native_mujoco_and_mjx_contact_free_euler_rollouts_match(
             node_commands=jnp.asarray(
                 native_env.node_velocity_controller.latest_node_commands[None, :]
             ),
+            domain_randomization=jax.tree.map(
+                lambda value: value[None], mjx_env._nominal_domain_randomization_state()
+            ),
         )
 
         np.testing.assert_allclose(state.data.qpos[0], native_data.qpos, rtol=1e-6, atol=1e-7)
@@ -395,6 +398,175 @@ def test_mjx_reset_where_only_resets_masked_elements(
     )
 
 
+def test_mjx_domain_randomization_reset_is_deterministic_and_batched() -> None:
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            domain_randomization=DomainRandomizationConfig(
+                body_mass_multiplier_range=(0.5, 1.5),
+                body_inertia_multiplier_range=(2.0, 2.0),
+                geom_friction_slide_range=(0.25, 0.25),
+                gravity_z_range=(-4.0, -4.0),
+            ),
+        )
+    )
+    reset = jax.jit(env.reset)
+
+    _, state_a = reset(_keys(30, batch_size=4))
+    _, state_b = reset(_keys(30, batch_size=4))
+    _, state_c = reset(_keys(31, batch_size=4))
+
+    for actual, expected in zip(
+        jax.tree.leaves(state_a.domain_randomization),
+        jax.tree.leaves(state_b.domain_randomization),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(actual, expected)
+    assert not np.array_equal(
+        np.asarray(state_a.domain_randomization.body_mass_multiplier),
+        np.asarray(state_c.domain_randomization.body_mass_multiplier),
+    )
+    np.testing.assert_allclose(state_a.domain_randomization.body_inertia_multiplier, 2.0)
+    np.testing.assert_allclose(state_a.domain_randomization.geom_friction_slide, 0.25)
+    np.testing.assert_allclose(state_a.domain_randomization.gravity_z, -4.0)
+
+
+def test_mjx_domain_randomization_reset_where_only_resamples_masked_elements() -> None:
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            domain_randomization=DomainRandomizationConfig(
+                body_mass_multiplier_range=(0.5, 1.5),
+                gravity_z_range=(-11.0, -8.0),
+            ),
+        )
+    )
+    reset = jax.jit(env.reset)
+    reset_where = jax.jit(env.reset_where)
+
+    _, state = reset(_keys(32, batch_size=3))
+    _, merged = reset_where(_keys(33, batch_size=3), state, jnp.array([True, False, True]))
+
+    assert not np.array_equal(
+        np.asarray(state.domain_randomization.body_mass_multiplier[0]),
+        np.asarray(merged.domain_randomization.body_mass_multiplier[0]),
+    )
+    np.testing.assert_array_equal(
+        merged.domain_randomization.body_mass_multiplier[1],
+        state.domain_randomization.body_mass_multiplier[1],
+    )
+    assert not np.array_equal(
+        np.asarray(state.domain_randomization.gravity_z[2]),
+        np.asarray(merged.domain_randomization.gravity_z[2]),
+    )
+
+
+def _fixed_randomized_env(*, realistic: bool) -> MjxNodeVelocityEnv:
+    return MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=realistic),
+            domain_randomization=DomainRandomizationConfig(
+                body_mass_multiplier_range=(2.0, 2.0),
+                body_inertia_multiplier_range=(3.0, 3.0),
+                dof_damping_multiplier_range=(4.0, 4.0),
+                actuator_gain_multiplier_range=(5.0, 5.0),
+                actuator_bias_multiplier_range=(6.0, 6.0),
+                geom_friction_slide_range=(0.25, 0.25),
+                gravity_z_range=(-4.0, -4.0),
+            ),
+        )
+    )
+
+
+def _cpu_randomized_mjx_model(*, realistic: bool) -> mjx.Model:
+    model = get_mujoco_spec("tetrahedron", realistic=realistic).compile()
+    data = mujoco.MjData(model)
+    model.body_mass[:] *= 2.0
+    model.body_inertia[:] *= 3.0
+    model.dof_damping[:] *= 4.0
+    model.actuator_gainprm[:] *= 5.0
+    model.actuator_biasprm[:] *= 6.0
+    model.geom_friction[:, 0] = 0.25
+    model.opt.gravity[2] = -4.0
+    mujoco.mj_setConst(model, data)
+    return mjx.put_model(model)
+
+
+def test_mjx_domain_randomization_model_patch_matches_cpu_setconst_for_abstract_model() -> None:
+    env = _fixed_randomized_env(realistic=False)
+    domain = replace(
+        env._nominal_domain_randomization_state(),
+        body_mass_multiplier=jnp.asarray(2.0),
+        body_inertia_multiplier=jnp.asarray(3.0),
+        dof_damping_multiplier=jnp.asarray(4.0),
+        actuator_gain_multiplier=jnp.asarray(5.0),
+        actuator_bias_multiplier=jnp.asarray(6.0),
+        geom_friction_slide=jnp.asarray(0.25),
+        gravity_z=jnp.asarray(-4.0),
+    )
+    actual = env._model_for_domain(domain)
+    expected = _cpu_randomized_mjx_model(realistic=False)
+
+    for field in (
+        "body_mass",
+        "body_subtreemass",
+        "body_inertia",
+        "body_invweight0",
+        "dof_damping",
+        "dof_invweight0",
+        "dof_M0",
+        "tendon_invweight0",
+        "actuator_gainprm",
+        "actuator_biasprm",
+        "actuator_acc0",
+        "geom_friction",
+    ):
+        np.testing.assert_allclose(getattr(actual, field), getattr(expected, field), rtol=1e-6)
+    np.testing.assert_allclose(actual.opt.gravity, expected.opt.gravity)
+
+
+def test_mjx_domain_randomization_realistic_rollout_is_finite() -> None:
+    env = _fixed_randomized_env(realistic=True)
+    reset = jax.jit(env.reset)
+    step = jax.jit(env.step)
+
+    obs, state = reset(_keys(34, batch_size=2))
+    actions = jnp.zeros((2, env.action_size), dtype=jnp.float32)
+    obs, state, reward, done, info = step(_keys(35, batch_size=2), state, actions)
+
+    assert obs.shape == (2, env.observation_size)
+    assert reward.shape == (2,)
+    assert done.shape == (2,)
+    assert all(value.shape == (2,) for value in info.values())
+    assert np.all(np.isfinite(np.asarray(state.data.qpos)))
+    assert np.all(np.isfinite(np.asarray(obs)))
+    assert np.all(np.isfinite(np.asarray(reward)))
+
+
+def test_mjx_domain_randomization_batch_elements_diverge_under_same_actions() -> None:
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            domain_randomization=DomainRandomizationConfig(
+                body_mass_multiplier_range=(0.5, 2.0),
+                gravity_z_range=(-12.0, -6.0),
+            ),
+        )
+    )
+    reset = jax.jit(env.reset)
+    step = jax.jit(env.step)
+
+    _, state = reset(_keys(36, batch_size=2))
+    state = replace(
+        state,
+        data=jax.tree.map(lambda value: value.at[1].set(value[0]), state.data),
+    )
+    actions = jnp.full((2, env.action_size), 0.005, dtype=jnp.float32)
+    _, state, _, _, _ = step(_keys(37, batch_size=2), state, actions)
+
+    assert not np.array_equal(np.asarray(state.data.qpos[0]), np.asarray(state.data.qpos[1]))
+
+
 def test_mjx_control_noise_is_explicitly_keyed() -> None:
     env = MjxNodeVelocityEnv(
         TrussEnvConfig(
@@ -437,8 +609,22 @@ def test_mjx_nonfinite_terminal_diagnostics_keep_reward_finite(
 
 def test_mjx_env_rejects_unsupported_configuration_and_models(tmp_path: Path) -> None:
     spec = get_mujoco_spec("tetrahedron", realistic=False)
-    with pytest.raises(ValueError, match="DomainRandomizationConfig"):
-        MjxNodeVelocityEnv(TrussEnvConfig(spec, domain_randomization=DomainRandomizationConfig()))
+    MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            spec,
+            domain_randomization=DomainRandomizationConfig(
+                body_mass_multiplier_range=(1.0, 1.0)
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="model_factory"):
+        MjxNodeVelocityEnv(
+            TrussEnvConfig(
+                spec,
+                domain_randomization=DomainRandomizationConfig(model_factory=lambda _rng: spec),
+            )
+        )
 
     root = ET.fromstring(spec.to_xml())
     actuator = root.find("actuator")

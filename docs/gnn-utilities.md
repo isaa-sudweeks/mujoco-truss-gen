@@ -51,7 +51,23 @@ spec = get_mujoco_spec("octahedron", realistic=True)
 
 # Shows action/control nodes, actuated edges, and virtual connector edges.
 fig, ax, graph = view_graph(spec, graph_view="control")
+
+# Uses the current MuJoCo x/y/z node positions for a rotatable 3D view.
+fig, ax, graph = view_graph(
+    spec,
+    graph_view="control",
+    layout="physical",
+    dim=3,
+)
 ```
+
+The 3D physical layout starts from the model's actual current pose, not a
+separately computed graph embedding. Nodes that overlap in the default camera
+view are spread slightly around their shared area so duplicate control nodes
+remain visible. Set `overlap_offset=0` to disable this display-only separation;
+the graph's `pos3d` data always retains the true coordinates. Force-directed
+layouts also support 3D by setting `dim=3` with `layout="spring"` or another
+supported layout.
 
 For custom plotting, build the NetworkX graph directly:
 

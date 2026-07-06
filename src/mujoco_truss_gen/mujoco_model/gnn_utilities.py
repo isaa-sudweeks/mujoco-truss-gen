@@ -149,7 +149,8 @@ def get_networkx_graph(
     """
     Returns a NetworkX graph for the requested GNN graph view.
 
-    Node attributes include ``label`` and, when available, ``feature`` and ``pos``.
+    Node attributes include ``label`` and, when available, ``feature``, 2D ``pos``,
+    and 3D ``pos3d``.
     Edge attributes include ``type``: ``"actuated"``, ``"connector"``, or
     ``"structural"``. The control graph is returned as a ``networkx.MultiGraph`` so
     parallel actuated/connector relationships between the same nodes can be preserved.
@@ -174,6 +175,8 @@ def get_networkx_graph(
             attributes["feature"] = feature.copy()
             if feature.size >= 2:
                 attributes["pos"] = (float(feature[0]), float(feature[1]))
+            if feature.size >= 3:
+                attributes["pos3d"] = tuple(float(value) for value in feature[:3])
         graph.add_node(node_name, **attributes)
 
     for from_node, to_node, edge_type in _named_graph_edges(model, graph_view):
@@ -188,6 +191,8 @@ def view_graph(
     graph_view: GraphView = "control",
     aggregation: LogicalAggregation = "mean",
     layout: Literal["spring", "kamada_kawai", "spectral", "physical"] = "spring",
+    dim: Literal[2, 3] = 2,
+    overlap_offset: float = 0.05,
     seed: int = 7,
     with_labels: bool = True,
     show_edge_types: bool = True,
@@ -204,8 +209,14 @@ def view_graph(
         source: A MujocoModel, mujoco.MjSpec, XML string/path, or mujoco.MjModel.
         graph_view: ``"physical"``, ``"logical"``, or ``"control"``.
         aggregation: Logical-node aggregation for ``graph_view="logical"``.
-        layout: NetworkX layout. ``"physical"`` uses node x/y positions from the
-            selected graph features when available.
+        layout: NetworkX layout. ``"physical"`` uses node positions from the
+            selected graph features when available, matching the current MuJoCo pose.
+        dim: Plot and layout dimension. Use ``3`` with ``layout="physical"`` to
+            inspect the graph at its exact MuJoCo x/y/z coordinates.
+        overlap_offset: Display-only separation for nodes that overlap in the default
+            3D view, as a fraction of the layout's diagonal span. Set to ``0`` to
+            preserve exact plotted coordinates. The graph's ``pos3d`` attributes are
+            never changed.
         seed: Seed used by the spring layout.
         with_labels: Draw node labels.
         show_edge_types: Use different styles for actuated, connector, and
@@ -226,57 +237,91 @@ def view_graph(
             'pip install "mujoco-truss-gen[graph]"'
         ) from exc
 
+    if dim not in (2, 3):
+        raise ValueError("dim must be 2 or 3.")
+    if overlap_offset < 0.0:
+        raise ValueError("overlap_offset must be nonnegative.")
+
     graph = get_networkx_graph(
         source,
         graph_view=graph_view,
         aggregation=aggregation,
     )
     if ax is None:
-        fig, ax = plt.subplots(figsize=figsize)
+        subplot_kw = {"projection": "3d"} if dim == 3 else None
+        fig, ax = plt.subplots(figsize=figsize, subplot_kw=subplot_kw)
     else:
+        if dim == 3 and getattr(ax, "name", None) != "3d":
+            raise ValueError("dim=3 requires a Matplotlib 3D axes.")
         fig = ax.figure
 
-    positions = _graph_layout_positions(graph, layout=layout, seed=seed, nx=nx)
-    nx.draw_networkx_nodes(
-        graph,
-        positions,
-        ax=ax,
-        node_color="#f4f7fb",
-        edgecolors="#1f2937",
-        linewidths=1.2,
-        node_size=node_size,
-    )
+    positions = _graph_layout_positions(graph, layout=layout, dim=dim, seed=seed, nx=nx)
+    if dim == 3 and overlap_offset > 0.0:
+        positions = _separate_overlapping_positions(positions, offset=overlap_offset)
 
     edge_styles = {
         "actuated": {"edge_color": "#2563eb", "style": "solid", "width": 2.0},
         "connector": {"edge_color": "#6b7280", "style": "dashed", "width": 1.6},
         "structural": {"edge_color": "#111827", "style": "solid", "width": 1.8},
     }
-    if show_edge_types:
-        for edge_type, style in edge_styles.items():
-            edges = [
-                (from_node, to_node)
-                for from_node, to_node, edge_data in graph.edges(data=True)
-                if edge_data.get("type", "structural") == edge_type
-            ]
-            if not edges:
-                continue
-            nx.draw_networkx_edges(graph, positions, edgelist=edges, ax=ax, **style)
-    else:
-        nx.draw_networkx_edges(graph, positions, ax=ax, edge_color="#111827", width=1.8)
-
-    if with_labels:
-        nx.draw_networkx_labels(
+    if dim == 3:
+        _draw_graph_3d(
             graph,
             positions,
-            labels={node_name: node_name for node_name in graph.nodes},
             ax=ax,
+            edge_styles=edge_styles,
+            node_size=node_size,
             font_size=font_size,
+            with_labels=with_labels,
+            show_edge_types=show_edge_types,
         )
+    else:
+        nx.draw_networkx_nodes(
+            graph,
+            positions,
+            ax=ax,
+            node_color="#f4f7fb",
+            edgecolors="#1f2937",
+            linewidths=1.2,
+            node_size=node_size,
+        )
+        if show_edge_types:
+            for edge_type, style in edge_styles.items():
+                edges = [
+                    (from_node, to_node)
+                    for from_node, to_node, edge_data in graph.edges(data=True)
+                    if edge_data.get("type", "structural") == edge_type
+                ]
+                if not edges:
+                    continue
+                nx.draw_networkx_edges(graph, positions, edgelist=edges, ax=ax, **style)
+        else:
+            nx.draw_networkx_edges(
+                graph,
+                positions,
+                ax=ax,
+                edge_color="#111827",
+                width=1.8,
+            )
+
+        if with_labels:
+            nx.draw_networkx_labels(
+                graph,
+                positions,
+                labels={node_name: node_name for node_name in graph.nodes},
+                ax=ax,
+                font_size=font_size,
+            )
 
     ax.set_title(f"{graph_view.capitalize()} graph")
-    ax.set_axis_off()
-    ax.set_aspect("equal", adjustable="datalim")
+    if dim == 3:
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+        _set_3d_axes_equal(ax, positions)
+    else:
+        ax.set_axis_off()
+        ax.set_aspect("equal", adjustable="datalim")
 
     if show_edge_types:
         present_edge_types = {
@@ -362,26 +407,169 @@ def _graph_layout_positions(
     graph: Any,
     *,
     layout: str,
+    dim: Literal[2, 3],
     seed: int,
     nx: Any,
-) -> dict[str, tuple[float, float]]:
+) -> dict[str, np.ndarray | tuple[float, ...]]:
     if layout == "physical":
+        position_attribute = "pos3d" if dim == 3 else "pos"
         physical_positions = {
-            node_name: node_data["pos"]
+            node_name: node_data[position_attribute]
             for node_name, node_data in graph.nodes(data=True)
-            if "pos" in node_data
+            if position_attribute in node_data
         }
         if len(physical_positions) == graph.number_of_nodes():
             return physical_positions
         layout = "spring"
 
     if layout == "spring":
-        return nx.spring_layout(graph, seed=seed)
+        return nx.spring_layout(graph, dim=dim, seed=seed)
     if layout == "kamada_kawai":
-        return nx.kamada_kawai_layout(graph)
+        return nx.kamada_kawai_layout(graph, dim=dim)
     if layout == "spectral":
-        return nx.spectral_layout(graph)
+        return nx.spectral_layout(graph, dim=dim)
     raise ValueError("layout must be 'spring', 'kamada_kawai', 'spectral', or 'physical'.")
+
+
+def _draw_graph_3d(
+    graph: Any,
+    positions: dict[str, np.ndarray | tuple[float, ...]],
+    *,
+    ax: Any,
+    edge_styles: dict[str, dict[str, Any]],
+    node_size: int,
+    font_size: int,
+    with_labels: bool,
+    show_edge_types: bool,
+) -> None:
+    coordinates = np.array([positions[node_name] for node_name in graph.nodes], dtype=float)
+    if coordinates.size:
+        ax.scatter(
+            coordinates[:, 0],
+            coordinates[:, 1],
+            coordinates[:, 2],
+            c="#f4f7fb",
+            edgecolors="#1f2937",
+            linewidths=1.2,
+            s=node_size,
+            depthshade=True,
+        )
+
+    default_style = {"edge_color": "#111827", "style": "solid", "width": 1.8}
+    for from_node, to_node, edge_data in graph.edges(data=True):
+        edge_type = edge_data.get("type", "structural")
+        style = edge_styles.get(edge_type, default_style) if show_edge_types else default_style
+        from_position = positions[from_node]
+        to_position = positions[to_node]
+        ax.plot(
+            [from_position[0], to_position[0]],
+            [from_position[1], to_position[1]],
+            [from_position[2], to_position[2]],
+            color=style["edge_color"],
+            linestyle=style["style"],
+            linewidth=style["width"],
+        )
+
+    if with_labels:
+        for node_name, position in positions.items():
+            ax.text(
+                position[0],
+                position[1],
+                position[2],
+                node_name,
+                fontsize=font_size,
+                ha="center",
+                va="center",
+            )
+
+
+def _separate_overlapping_positions(
+    positions: dict[str, np.ndarray | tuple[float, ...]],
+    *,
+    offset: float,
+) -> dict[str, np.ndarray]:
+    if len(positions) < 2:
+        return {
+            node_name: np.asarray(position, dtype=float)
+            for node_name, position in positions.items()
+        }
+
+    node_names = list(positions)
+    coordinates = np.array([positions[node_name] for node_name in node_names], dtype=float)
+    diagonal_span = float(np.linalg.norm(np.ptp(coordinates, axis=0)))
+    if diagonal_span == 0.0:
+        diagonal_span = 1.0
+    screen_right, screen_up = _default_view_basis()
+    projected = coordinates @ np.vstack((screen_right, screen_up)).T
+    separation_radius = diagonal_span * offset
+    overlap_distance = 2.0 * separation_radius
+
+    groups: list[list[int]] = []
+    for index, projected_coordinate in enumerate(projected):
+        for group in groups:
+            if (
+                np.linalg.norm(projected_coordinate - projected[group[0]])
+                <= overlap_distance
+            ):
+                group.append(index)
+                break
+        else:
+            groups.append([index])
+
+    separated = coordinates.copy()
+    for group in groups:
+        if len(group) < 2:
+            continue
+        group_coordinates = coordinates[group]
+        center = np.mean(group_coordinates, axis=0)
+        deltas = group_coordinates - center
+        depth_deltas = deltas - (
+            (deltas @ screen_right)[:, np.newaxis] * screen_right
+            + (deltas @ screen_up)[:, np.newaxis] * screen_up
+        )
+        display_offsets = separation_radius * _default_view_plane_points(
+            len(group), phase=np.pi / 2.0
+        )
+        separated[group] = center + depth_deltas + display_offsets
+
+    return {node_name: separated[index] for index, node_name in enumerate(node_names)}
+
+
+def _default_view_plane_points(count: int, *, phase: float) -> np.ndarray:
+    screen_right, screen_up = _default_view_basis()
+    angles = phase + np.arange(count, dtype=float) * (2.0 * np.pi / count)
+    return (
+        np.cos(angles)[:, np.newaxis] * screen_right
+        + np.sin(angles)[:, np.newaxis] * screen_up
+    )
+
+
+def _default_view_basis() -> tuple[np.ndarray, np.ndarray]:
+    default_elevation = np.deg2rad(30.0)
+    default_azimuth = np.deg2rad(-60.0)
+    screen_right = np.array(
+        [-np.sin(default_azimuth), np.cos(default_azimuth), 0.0]
+    )
+    screen_up = np.array(
+        [
+            -np.sin(default_elevation) * np.cos(default_azimuth),
+            -np.sin(default_elevation) * np.sin(default_azimuth),
+            np.cos(default_elevation),
+        ]
+    )
+    return screen_right, screen_up
+
+
+def _set_3d_axes_equal(
+    ax: Any,
+    positions: dict[str, np.ndarray | tuple[float, ...]],
+) -> None:
+    if not positions:
+        return
+    coordinates = np.array(list(positions.values()), dtype=float)
+    spans = np.ptp(coordinates, axis=0)
+    spans[spans == 0.0] = 1.0
+    ax.set_box_aspect(spans)
 
 
 def _get_control_edge_index(model: MujocoModel) -> np.ndarray:

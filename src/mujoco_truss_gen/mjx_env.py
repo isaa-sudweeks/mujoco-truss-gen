@@ -9,12 +9,26 @@ import mujoco  # type: ignore[import-untyped]
 import numpy as np
 from mujoco import mjx
 
-from mujoco_truss_gen.base_env import TrussEnvConfig, _coerce_config
+from mujoco_truss_gen.base_env import Range, TrussEnvConfig, _coerce_config
 from mujoco_truss_gen.mjx_controllers import MjxAngleBisectorController
 from mujoco_truss_gen.mujoco_model.controllers import NodeVelocityController
 from mujoco_truss_gen.mujoco_model.model import ModelSource, MujocoModel
 
 MjxInfo = dict[str, jax.Array]
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True, slots=True)
+class MjxDomainRandomizationState:
+    """Per-environment domain parameters for :class:`MjxNodeVelocityEnv`."""
+
+    body_mass_multiplier: jax.Array
+    body_inertia_multiplier: jax.Array
+    dof_damping_multiplier: jax.Array
+    actuator_gain_multiplier: jax.Array
+    actuator_bias_multiplier: jax.Array
+    geom_friction_slide: jax.Array
+    gravity_z: jax.Array
 
 
 @jax.tree_util.register_dataclass
@@ -25,6 +39,7 @@ class MjxEnvState:
     data: mjx.Data
     step_count: jax.Array
     node_commands: jax.Array
+    domain_randomization: MjxDomainRandomizationState
 
 
 class MjxNodeVelocityEnv:
@@ -43,6 +58,7 @@ class MjxNodeVelocityEnv:
     ) -> None:
         self.config = _coerce_config(model_source, config_overrides)
         self._validate_config()
+        self._domain_randomization = self.config.domain_randomization
 
         self.mujoco_model = MujocoModel(self.config.model_source)
         model = self.mujoco_model.model
@@ -85,6 +101,44 @@ class MjxNodeVelocityEnv:
         self.observation_size = 7 * self.action_size
         self.action_low = jnp.full((self.action_size,), -float(self.config.speed))
         self.action_high = jnp.full((self.action_size,), float(self.config.speed))
+
+        self._domain_dtype = self.mjx_model.body_mass.dtype
+        self._nominal_gravity_z = float(model.opt.gravity[2])
+        self._body_mass_multiplier_range = self._jax_range(
+            self._domain_randomization.body_mass_multiplier_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._body_inertia_multiplier_range = self._jax_range(
+            self._domain_randomization.body_inertia_multiplier_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._dof_damping_multiplier_range = self._jax_range(
+            self._domain_randomization.dof_damping_multiplier_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._actuator_gain_multiplier_range = self._jax_range(
+            self._domain_randomization.actuator_gain_multiplier_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._actuator_bias_multiplier_range = self._jax_range(
+            self._domain_randomization.actuator_bias_multiplier_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._geom_friction_slide_range = self._jax_range(
+            self._domain_randomization.geom_friction_slide_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._gravity_z_range = self._jax_range(
+            self._domain_randomization.gravity_z_range
+            if self._domain_randomization is not None
+            else None
+        )
 
         self._passive_node_mask = jnp.asarray(self._controller.passive_node_mask)
         self._incidence_matrix = jnp.asarray(self._controller.incidence_matrix)
@@ -156,11 +210,23 @@ class MjxNodeVelocityEnv:
         )
 
     def _validate_config(self) -> None:
-        if self.config.domain_randomization is not None:
-            raise ValueError(
-                "MjxNodeVelocityEnv does not yet support DomainRandomizationConfig; "
-                "use a fixed model and task configuration."
-            )
+        randomization = self.config.domain_randomization
+        if randomization is not None:
+            if randomization.model_factory is not None:
+                raise ValueError(
+                    "MjxNodeVelocityEnv requires one fixed model shape; "
+                    "DomainRandomizationConfig.model_factory is not supported."
+                )
+            for name in (
+                "body_mass_multiplier_range",
+                "body_inertia_multiplier_range",
+                "dof_damping_multiplier_range",
+                "actuator_gain_multiplier_range",
+                "actuator_bias_multiplier_range",
+                "geom_friction_slide_range",
+                "gravity_z_range",
+            ):
+                self._validate_range(getattr(randomization, name), name)
         if int(self.config.max_steps) <= 0:
             raise ValueError("max_steps must be greater than zero.")
         if int(self.config.nsubsteps) <= 0:
@@ -172,11 +238,16 @@ class MjxNodeVelocityEnv:
         """Reset a batch from one explicit random key per environment."""
 
         batch_size = self._key_batch_size(keys)
-        data = jax.vmap(self._reset_one)(keys)
+        split_keys = jax.vmap(lambda key: jax.random.split(key))(keys)
+        reset_keys = split_keys[:, 0]
+        domain_keys = split_keys[:, 1]
+        domain_randomization = jax.vmap(self._sample_domain_randomization)(domain_keys)
+        data = jax.vmap(self._reset_one)(reset_keys, domain_randomization)
         state = MjxEnvState(
             data=data,
             step_count=jnp.zeros((batch_size,), dtype=jnp.int32),
             node_commands=jnp.zeros((batch_size, self.action_size), dtype=self.action_low.dtype),
+            domain_randomization=domain_randomization,
         )
         return self._get_obs(state), state
 
@@ -216,8 +287,13 @@ class MjxNodeVelocityEnv:
         merged_state = jax.tree.map(select, reset_state, state)
         return self._get_obs(merged_state), merged_state
 
-    def _reset_one(self, key: jax.Array) -> mjx.Data:
+    def _reset_one(
+        self,
+        key: jax.Array,
+        domain_randomization: MjxDomainRandomizationState,
+    ) -> mjx.Data:
         qpos_key, qvel_key = jax.random.split(key)
+        model = self._model_for_domain(domain_randomization)
         data = self._data_template.replace(
             qpos=self._data_template.qpos
             + jax.random.uniform(
@@ -235,12 +311,12 @@ class MjxNodeVelocityEnv:
             ),
             ctrl=jnp.zeros_like(self._data_template.ctrl),
         )
-        data = mjx.forward(self.mjx_model, data)
+        data = mjx.forward(model, data)
         data = self._angle_bisector_controller.initialize(data)
         if self._reset_act_adrs.size:
             act = data.act.at[self._reset_act_adrs].set(data.ten_length[self._reset_tendon_ids])
             data = data.replace(act=act)
-        return mjx.forward(self.mjx_model, data)
+        return mjx.forward(model, data)
 
     def _step_one(
         self,
@@ -249,6 +325,7 @@ class MjxNodeVelocityEnv:
         action: jax.Array,
     ) -> tuple[jax.Array, MjxEnvState, jax.Array, jax.Array, MjxInfo]:
         action = jnp.clip(action, self.action_low, self.action_high)
+        model = self._model_for_domain(state.domain_randomization)
         previous_com = self._center_of_mass(state.data)
 
         node_commands = jnp.where(self._passive_node_mask, 0.0, action)
@@ -261,7 +338,7 @@ class MjxNodeVelocityEnv:
 
         def physics_substep(_index: int, loop_data: mjx.Data) -> mjx.Data:
             loop_data = self._angle_bisector_controller.update(loop_data)
-            return mjx.step(self.mjx_model, loop_data)
+            return mjx.step(model, loop_data)
 
         data = jax.lax.fori_loop(0, int(self.config.nsubsteps), physics_substep, data)
 
@@ -270,6 +347,7 @@ class MjxNodeVelocityEnv:
             data=data,
             step_count=step_count,
             node_commands=node_commands,
+            domain_randomization=state.domain_randomization,
         )
         reward, info, terminated = self._compute_reward(data, action, previous_com)
         truncated = step_count >= int(self.config.max_steps)
@@ -278,6 +356,109 @@ class MjxNodeVelocityEnv:
         info["terminated"] = terminated
         info["truncated"] = truncated
         return self._get_obs_one(data, node_commands), next_state, reward, done, info
+
+    def _sample_domain_randomization(self, key: jax.Array) -> MjxDomainRandomizationState:
+        keys = jax.random.split(key, 7)
+        return MjxDomainRandomizationState(
+            body_mass_multiplier=self._sample_jax_range(
+                keys[0], self._body_mass_multiplier_range, 1.0
+            ),
+            body_inertia_multiplier=self._sample_jax_range(
+                keys[1], self._body_inertia_multiplier_range, 1.0
+            ),
+            dof_damping_multiplier=self._sample_jax_range(
+                keys[2], self._dof_damping_multiplier_range, 1.0
+            ),
+            actuator_gain_multiplier=self._sample_jax_range(
+                keys[3], self._actuator_gain_multiplier_range, 1.0
+            ),
+            actuator_bias_multiplier=self._sample_jax_range(
+                keys[4], self._actuator_bias_multiplier_range, 1.0
+            ),
+            geom_friction_slide=self._sample_jax_range(
+                keys[5], self._geom_friction_slide_range, self.mjx_model.geom_friction[0, 0]
+            ),
+            gravity_z=self._sample_jax_range(
+                keys[6], self._gravity_z_range, self._nominal_gravity_z
+            ),
+        )
+
+    def _nominal_domain_randomization_state(self) -> MjxDomainRandomizationState:
+        dtype = self._domain_dtype
+        return MjxDomainRandomizationState(
+            body_mass_multiplier=jnp.asarray(1.0, dtype=dtype),
+            body_inertia_multiplier=jnp.asarray(1.0, dtype=dtype),
+            dof_damping_multiplier=jnp.asarray(1.0, dtype=dtype),
+            actuator_gain_multiplier=jnp.asarray(1.0, dtype=dtype),
+            actuator_bias_multiplier=jnp.asarray(1.0, dtype=dtype),
+            geom_friction_slide=jnp.asarray(self.mjx_model.geom_friction[0, 0], dtype=dtype),
+            gravity_z=jnp.asarray(self._nominal_gravity_z, dtype=dtype),
+        )
+
+    def _model_for_domain(self, domain: MjxDomainRandomizationState) -> mjx.Model:
+        model = self.mjx_model
+
+        if self._body_mass_multiplier_range is not None:
+            multiplier = domain.body_mass_multiplier
+            inverse_multiplier = 1.0 / multiplier
+            model = model.replace(
+                body_mass=model.body_mass * multiplier,
+                body_subtreemass=model.body_subtreemass * multiplier,
+                body_invweight0=model.body_invweight0 * inverse_multiplier,
+                dof_invweight0=model.dof_invweight0 * inverse_multiplier,
+                dof_M0=model.dof_M0 * multiplier,
+                tendon_invweight0=model.tendon_invweight0 * inverse_multiplier,
+                actuator_acc0=model.actuator_acc0 * inverse_multiplier,
+            )
+        if self._body_inertia_multiplier_range is not None:
+            model = model.replace(body_inertia=model.body_inertia * domain.body_inertia_multiplier)
+        if self._dof_damping_multiplier_range is not None:
+            model = model.replace(dof_damping=model.dof_damping * domain.dof_damping_multiplier)
+        if self._actuator_gain_multiplier_range is not None:
+            model = model.replace(
+                actuator_gainprm=model.actuator_gainprm * domain.actuator_gain_multiplier
+            )
+        if self._actuator_bias_multiplier_range is not None:
+            model = model.replace(
+                actuator_biasprm=model.actuator_biasprm * domain.actuator_bias_multiplier
+            )
+        if self._geom_friction_slide_range is not None:
+            model = model.replace(
+                geom_friction=model.geom_friction.at[:, 0].set(domain.geom_friction_slide)
+            )
+        if self._gravity_z_range is not None:
+            model = model.replace(
+                opt=model.opt.replace(gravity=model.opt.gravity.at[2].set(domain.gravity_z))
+            )
+        return model
+
+    def _sample_jax_range(
+        self,
+        key: jax.Array,
+        value_range: tuple[jax.Array, jax.Array] | None,
+        default: float | jax.Array,
+    ) -> jax.Array:
+        if value_range is None:
+            return jnp.asarray(default, dtype=self._domain_dtype)
+        low, high = value_range
+        return jax.random.uniform(key, (), minval=low, maxval=high, dtype=self._domain_dtype)
+
+    def _jax_range(self, value_range: Range | None) -> tuple[jax.Array, jax.Array] | None:
+        if value_range is None:
+            return None
+        low, high = value_range
+        return (
+            jnp.asarray(float(low), dtype=self._domain_dtype),
+            jnp.asarray(float(high), dtype=self._domain_dtype),
+        )
+
+    @staticmethod
+    def _validate_range(value_range: Range | None, name: str) -> None:
+        if value_range is None:
+            return
+        low, high = (float(value_range[0]), float(value_range[1]))
+        if not np.isfinite(low) or not np.isfinite(high) or low > high:
+            raise ValueError(f"{name} must contain finite values with low <= high.")
 
     def _apply_control_noise(
         self,
@@ -490,3 +671,8 @@ class MjxNodeVelocityEnv:
             raise ValueError("state batch dimension must match the number of step keys.")
         if state.node_commands.shape != expected_action_shape:
             raise ValueError("state node-command shape must match the action batch shape.")
+        for value in jax.tree.leaves(state.domain_randomization):
+            if value.shape != (batch_size,):
+                raise ValueError(
+                    "state domain-randomization shape must match the number of step keys."
+                )
