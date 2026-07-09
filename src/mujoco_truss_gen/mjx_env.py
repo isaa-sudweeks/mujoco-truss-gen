@@ -25,9 +25,18 @@ class MjxDomainRandomizationState:
     body_mass_multiplier: jax.Array
     body_inertia_multiplier: jax.Array
     dof_damping_multiplier: jax.Array
+    dof_armature: jax.Array
+    dof_frictionloss: jax.Array
     actuator_gain_multiplier: jax.Array
     actuator_bias_multiplier: jax.Array
+    actuator_dynprm_multiplier: jax.Array
     geom_friction_slide: jax.Array
+    geom_friction_torsional: jax.Array
+    geom_friction_rolling: jax.Array
+    tendon_stiffness: jax.Array
+    tendon_damping: jax.Array
+    tendon_armature: jax.Array
+    tendon_frictionloss: jax.Array
     gravity_z: jax.Array
 
 
@@ -96,6 +105,13 @@ class MjxNodeVelocityEnv:
             self._data_template = mjx.put_data(model, self.mujoco_model.data)
         except (NotImplementedError, ValueError) as error:
             raise ValueError(f"Model is not compatible with MJX: {error}") from error
+        self._enable_randomized_frictionloss_constraints()
+        const_data_template = mjx.forward(self.mjx_model, self._data_template)
+        self._tendon_jacobian0 = const_data_template._impl.ten_J
+        self._actuator_moment0 = const_data_template._impl.actuator_moment
+        self._qM0 = const_data_template._impl.qM
+        self._nominal_qm_physical = self._nominal_physical_mass_matrix()
+        self._actuator_acc0_scale = self._nominal_actuator_acc0_scale()
 
         self.action_size = len(self._controller.node_names)
         self.observation_size = 7 * self.action_size
@@ -119,6 +135,16 @@ class MjxNodeVelocityEnv:
             if self._domain_randomization is not None
             else None
         )
+        self._dof_armature_range = self._jax_range(
+            self._domain_randomization.dof_armature_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._dof_frictionloss_range = self._jax_range(
+            self._domain_randomization.dof_frictionloss_range
+            if self._domain_randomization is not None
+            else None
+        )
         self._actuator_gain_multiplier_range = self._jax_range(
             self._domain_randomization.actuator_gain_multiplier_range
             if self._domain_randomization is not None
@@ -129,8 +155,43 @@ class MjxNodeVelocityEnv:
             if self._domain_randomization is not None
             else None
         )
+        self._actuator_dynprm_multiplier_range = self._jax_range(
+            self._domain_randomization.actuator_dynprm_multiplier_range
+            if self._domain_randomization is not None
+            else None
+        )
         self._geom_friction_slide_range = self._jax_range(
             self._domain_randomization.geom_friction_slide_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._geom_friction_torsional_range = self._jax_range(
+            self._domain_randomization.geom_friction_torsional_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._geom_friction_rolling_range = self._jax_range(
+            self._domain_randomization.geom_friction_rolling_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._tendon_stiffness_range = self._jax_range(
+            self._domain_randomization.tendon_stiffness_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._tendon_damping_range = self._jax_range(
+            self._domain_randomization.tendon_damping_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._tendon_armature_range = self._jax_range(
+            self._domain_randomization.tendon_armature_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._tendon_frictionloss_range = self._jax_range(
+            self._domain_randomization.tendon_frictionloss_range
             if self._domain_randomization is not None
             else None
         )
@@ -209,6 +270,48 @@ class MjxNodeVelocityEnv:
             model.actuator_trnid[reset_actuator_ids, 0], dtype=jnp.int32
         )
 
+    def _enable_randomized_frictionloss_constraints(self) -> None:
+        if self._domain_randomization is None:
+            return
+
+        impl = self.mjx_model._impl
+        if self._domain_randomization.dof_frictionloss_range is not None:
+            impl = impl.replace(
+                dof_hasfrictionloss=np.ones_like(impl.dof_hasfrictionloss, dtype=bool)
+            )
+        if self._domain_randomization.tendon_frictionloss_range is not None:
+            impl = impl.replace(
+                tendon_hasfrictionloss=np.ones_like(
+                    impl.tendon_hasfrictionloss, dtype=bool
+                )
+            )
+        self.mjx_model = self.mjx_model.replace(_impl=impl)
+
+    def _nominal_physical_mass_matrix(self) -> jax.Array:
+        tendon_armature_diag = jnp.sum(
+            jnp.square(self._tendon_jacobian0) * self.mjx_model.tendon_armature[:, None],
+            axis=0,
+        )
+        return (
+            self._qM0
+            - jnp.diag(self.mjx_model.dof_armature)
+            - jnp.diag(tendon_armature_diag)
+        )
+
+    def _nominal_actuator_acc0_scale(self) -> jax.Array:
+        nominal_inverse_qm = jnp.linalg.inv(self._qM0)
+        nominal_quadratic = jnp.einsum(
+            "ij,jk,ik->i",
+            self._actuator_moment0,
+            nominal_inverse_qm,
+            self._actuator_moment0,
+        )
+        return jnp.where(
+            nominal_quadratic > 0.0,
+            self.mjx_model.actuator_acc0 / nominal_quadratic,
+            0.0,
+        )
+
     def _validate_config(self) -> None:
         randomization = self.config.domain_randomization
         if randomization is not None:
@@ -221,9 +324,18 @@ class MjxNodeVelocityEnv:
                 "body_mass_multiplier_range",
                 "body_inertia_multiplier_range",
                 "dof_damping_multiplier_range",
+                "dof_armature_range",
+                "dof_frictionloss_range",
                 "actuator_gain_multiplier_range",
                 "actuator_bias_multiplier_range",
+                "actuator_dynprm_multiplier_range",
                 "geom_friction_slide_range",
+                "geom_friction_torsional_range",
+                "geom_friction_rolling_range",
+                "tendon_stiffness_range",
+                "tendon_damping_range",
+                "tendon_armature_range",
+                "tendon_frictionloss_range",
                 "gravity_z_range",
             ):
                 self._validate_range(getattr(randomization, name), name)
@@ -358,7 +470,7 @@ class MjxNodeVelocityEnv:
         return self._get_obs_one(data, node_commands), next_state, reward, done, info
 
     def _sample_domain_randomization(self, key: jax.Array) -> MjxDomainRandomizationState:
-        keys = jax.random.split(key, 7)
+        keys = jax.random.split(key, 16)
         return MjxDomainRandomizationState(
             body_mass_multiplier=self._sample_jax_range(
                 keys[0], self._body_mass_multiplier_range, 1.0
@@ -369,17 +481,40 @@ class MjxNodeVelocityEnv:
             dof_damping_multiplier=self._sample_jax_range(
                 keys[2], self._dof_damping_multiplier_range, 1.0
             ),
+            dof_armature=self._sample_jax_range(keys[3], self._dof_armature_range, 0.0),
+            dof_frictionloss=self._sample_jax_range(keys[4], self._dof_frictionloss_range, 0.0),
             actuator_gain_multiplier=self._sample_jax_range(
-                keys[3], self._actuator_gain_multiplier_range, 1.0
+                keys[5], self._actuator_gain_multiplier_range, 1.0
             ),
             actuator_bias_multiplier=self._sample_jax_range(
-                keys[4], self._actuator_bias_multiplier_range, 1.0
+                keys[6], self._actuator_bias_multiplier_range, 1.0
+            ),
+            actuator_dynprm_multiplier=self._sample_jax_range(
+                keys[7], self._actuator_dynprm_multiplier_range, 1.0
             ),
             geom_friction_slide=self._sample_jax_range(
-                keys[5], self._geom_friction_slide_range, self.mjx_model.geom_friction[0, 0]
+                keys[8], self._geom_friction_slide_range, self.mjx_model.geom_friction[0, 0]
+            ),
+            geom_friction_torsional=self._sample_jax_range(
+                keys[9],
+                self._geom_friction_torsional_range,
+                self.mjx_model.geom_friction[0, 1],
+            ),
+            geom_friction_rolling=self._sample_jax_range(
+                keys[10],
+                self._geom_friction_rolling_range,
+                self.mjx_model.geom_friction[0, 2],
+            ),
+            tendon_stiffness=self._sample_jax_range(
+                keys[11], self._tendon_stiffness_range, 0.0
+            ),
+            tendon_damping=self._sample_jax_range(keys[12], self._tendon_damping_range, 0.0),
+            tendon_armature=self._sample_jax_range(keys[13], self._tendon_armature_range, 0.0),
+            tendon_frictionloss=self._sample_jax_range(
+                keys[14], self._tendon_frictionloss_range, 0.0
             ),
             gravity_z=self._sample_jax_range(
-                keys[6], self._gravity_z_range, self._nominal_gravity_z
+                keys[15], self._gravity_z_range, self._nominal_gravity_z
             ),
         )
 
@@ -389,9 +524,20 @@ class MjxNodeVelocityEnv:
             body_mass_multiplier=jnp.asarray(1.0, dtype=dtype),
             body_inertia_multiplier=jnp.asarray(1.0, dtype=dtype),
             dof_damping_multiplier=jnp.asarray(1.0, dtype=dtype),
+            dof_armature=jnp.asarray(0.0, dtype=dtype),
+            dof_frictionloss=jnp.asarray(0.0, dtype=dtype),
             actuator_gain_multiplier=jnp.asarray(1.0, dtype=dtype),
             actuator_bias_multiplier=jnp.asarray(1.0, dtype=dtype),
+            actuator_dynprm_multiplier=jnp.asarray(1.0, dtype=dtype),
             geom_friction_slide=jnp.asarray(self.mjx_model.geom_friction[0, 0], dtype=dtype),
+            geom_friction_torsional=jnp.asarray(
+                self.mjx_model.geom_friction[0, 1], dtype=dtype
+            ),
+            geom_friction_rolling=jnp.asarray(self.mjx_model.geom_friction[0, 2], dtype=dtype),
+            tendon_stiffness=jnp.asarray(0.0, dtype=dtype),
+            tendon_damping=jnp.asarray(0.0, dtype=dtype),
+            tendon_armature=jnp.asarray(0.0, dtype=dtype),
+            tendon_frictionloss=jnp.asarray(0.0, dtype=dtype),
             gravity_z=jnp.asarray(self._nominal_gravity_z, dtype=dtype),
         )
 
@@ -414,6 +560,17 @@ class MjxNodeVelocityEnv:
             model = model.replace(body_inertia=model.body_inertia * domain.body_inertia_multiplier)
         if self._dof_damping_multiplier_range is not None:
             model = model.replace(dof_damping=model.dof_damping * domain.dof_damping_multiplier)
+        if self._dof_armature_range is not None:
+            model = model.replace(
+                dof_armature=jnp.full_like(model.dof_armature, domain.dof_armature),
+                dof_M0=model.dof_M0
+                + domain.dof_armature
+                - self.mjx_model.dof_armature * domain.body_mass_multiplier,
+            )
+        if self._dof_frictionloss_range is not None:
+            model = model.replace(
+                dof_frictionloss=jnp.full_like(model.dof_frictionloss, domain.dof_frictionloss)
+            )
         if self._actuator_gain_multiplier_range is not None:
             model = model.replace(
                 actuator_gainprm=model.actuator_gainprm * domain.actuator_gain_multiplier
@@ -422,15 +579,100 @@ class MjxNodeVelocityEnv:
             model = model.replace(
                 actuator_biasprm=model.actuator_biasprm * domain.actuator_bias_multiplier
             )
+        if self._actuator_dynprm_multiplier_range is not None:
+            model = model.replace(
+                actuator_dynprm=model.actuator_dynprm * domain.actuator_dynprm_multiplier
+            )
         if self._geom_friction_slide_range is not None:
             model = model.replace(
                 geom_friction=model.geom_friction.at[:, 0].set(domain.geom_friction_slide)
+            )
+        if self._geom_friction_torsional_range is not None:
+            model = model.replace(
+                geom_friction=model.geom_friction.at[:, 1].set(
+                    domain.geom_friction_torsional
+                )
+            )
+        if self._geom_friction_rolling_range is not None:
+            model = model.replace(
+                geom_friction=model.geom_friction.at[:, 2].set(domain.geom_friction_rolling)
+            )
+        if self._tendon_stiffness_range is not None:
+            model = model.replace(
+                tendon_stiffness=jnp.full_like(model.tendon_stiffness, domain.tendon_stiffness)
+            )
+        if self._tendon_damping_range is not None:
+            model = model.replace(
+                tendon_damping=jnp.full_like(model.tendon_damping, domain.tendon_damping)
+            )
+        if self._tendon_armature_range is not None:
+            model = model.replace(
+                tendon_armature=jnp.full_like(model.tendon_armature, domain.tendon_armature)
+            )
+        if self._tendon_frictionloss_range is not None:
+            model = model.replace(
+                tendon_frictionloss=jnp.full_like(
+                    model.tendon_frictionloss, domain.tendon_frictionloss
+                )
+            )
+        if (
+            self._body_mass_multiplier_range is not None
+            or self._dof_armature_range is not None
+            or self._tendon_armature_range is not None
+        ):
+            inverse_qm = self._reference_inverse_mass_matrix_for_domain(domain)
+            model = model.replace(
+                tendon_invweight0=self._tendon_invweight0_for_domain(inverse_qm),
+                actuator_acc0=self._actuator_acc0_for_domain(inverse_qm),
             )
         if self._gravity_z_range is not None:
             model = model.replace(
                 opt=model.opt.replace(gravity=model.opt.gravity.at[2].set(domain.gravity_z))
             )
         return model
+
+    def _reference_inverse_mass_matrix_for_domain(
+        self,
+        domain: MjxDomainRandomizationState,
+    ) -> jax.Array:
+        mass_multiplier = (
+            domain.body_mass_multiplier if self._body_mass_multiplier_range is not None else 1.0
+        )
+        dof_armature = (
+            jnp.full_like(self.mjx_model.dof_armature, domain.dof_armature)
+            if self._dof_armature_range is not None
+            else self.mjx_model.dof_armature
+        )
+        tendon_armature = (
+            jnp.full_like(self.mjx_model.tendon_armature, domain.tendon_armature)
+            if self._tendon_armature_range is not None
+            else self.mjx_model.tendon_armature
+        )
+        tendon_armature_diag = jnp.sum(
+            jnp.square(self._tendon_jacobian0) * tendon_armature[:, None],
+            axis=0,
+        )
+        qm = (
+            self._nominal_qm_physical * mass_multiplier
+            + jnp.diag(dof_armature)
+            + jnp.diag(tendon_armature_diag)
+        )
+        return jnp.linalg.inv(qm)
+
+    def _tendon_invweight0_for_domain(
+        self,
+        inverse_qm: jax.Array,
+    ) -> jax.Array:
+        return jnp.einsum("ij,jk,ik->i", self._tendon_jacobian0, inverse_qm, self._tendon_jacobian0)
+
+    def _actuator_acc0_for_domain(self, inverse_qm: jax.Array) -> jax.Array:
+        actuator_quadratic = jnp.einsum(
+            "ij,jk,ik->i",
+            self._actuator_moment0,
+            inverse_qm,
+            self._actuator_moment0,
+        )
+        return actuator_quadratic * self._actuator_acc0_scale
 
     def _sample_jax_range(
         self,

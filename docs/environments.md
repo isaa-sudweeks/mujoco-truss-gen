@@ -81,9 +81,18 @@ env = MujocoTrussEnv(
             body_mass_multiplier_range=(0.8, 1.2),
             body_inertia_multiplier_range=(0.8, 1.2),
             dof_damping_multiplier_range=(0.7, 1.3),
+            dof_armature_range=(0.0, 0.02),
+            dof_frictionloss_range=(0.0, 0.05),
             actuator_gain_multiplier_range=(0.75, 1.25),
             actuator_bias_multiplier_range=(0.75, 1.25),
+            actuator_dynprm_multiplier_range=(0.75, 1.25),
             geom_friction_slide_range=(0.4, 1.2),
+            geom_friction_torsional_range=(0.0001, 0.01),
+            geom_friction_rolling_range=(0.0001, 0.01),
+            tendon_stiffness_range=(0.0, 1.0),
+            tendon_damping_range=(0.0, 1.0),
+            tendon_armature_range=(0.0, 0.02),
+            tendon_frictionloss_range=(0.0, 0.05),
             gravity_z_range=(-10.5, -8.8),
         ),
     )
@@ -92,6 +101,12 @@ env = MujocoTrussEnv(
 obs, info = env.reset(seed=1)
 print(info["domain_randomization"])
 ```
+
+Mass and inertia ranges are global multipliers: they scale the existing model
+arrays and preserve active/passive/component mass ratios. Zero-default DOF and
+tendon fields use absolute sampled values. Runtime randomization intentionally
+does not change actuator control ranges, force ranges, action-space bounds, or
+the reset `qpos`/`qvel` perturbation.
 
 Use `model_factory` for changes that are baked into the compiled model, such as
 scale, node locations, topology, or `TrussPhysicalParameters` used while

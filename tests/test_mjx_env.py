@@ -405,7 +405,16 @@ def test_mjx_domain_randomization_reset_is_deterministic_and_batched() -> None:
             domain_randomization=DomainRandomizationConfig(
                 body_mass_multiplier_range=(0.5, 1.5),
                 body_inertia_multiplier_range=(2.0, 2.0),
+                dof_armature_range=(0.02, 0.02),
+                dof_frictionloss_range=(0.03, 0.03),
+                actuator_dynprm_multiplier_range=(4.0, 4.0),
                 geom_friction_slide_range=(0.25, 0.25),
+                geom_friction_torsional_range=(0.05, 0.05),
+                geom_friction_rolling_range=(0.01, 0.01),
+                tendon_stiffness_range=(0.4, 0.4),
+                tendon_damping_range=(0.5, 0.5),
+                tendon_armature_range=(0.06, 0.06),
+                tendon_frictionloss_range=(0.07, 0.07),
                 gravity_z_range=(-4.0, -4.0),
             ),
         )
@@ -427,7 +436,16 @@ def test_mjx_domain_randomization_reset_is_deterministic_and_batched() -> None:
         np.asarray(state_c.domain_randomization.body_mass_multiplier),
     )
     np.testing.assert_allclose(state_a.domain_randomization.body_inertia_multiplier, 2.0)
+    np.testing.assert_allclose(state_a.domain_randomization.dof_armature, 0.02)
+    np.testing.assert_allclose(state_a.domain_randomization.dof_frictionloss, 0.03)
+    np.testing.assert_allclose(state_a.domain_randomization.actuator_dynprm_multiplier, 4.0)
     np.testing.assert_allclose(state_a.domain_randomization.geom_friction_slide, 0.25)
+    np.testing.assert_allclose(state_a.domain_randomization.geom_friction_torsional, 0.05)
+    np.testing.assert_allclose(state_a.domain_randomization.geom_friction_rolling, 0.01)
+    np.testing.assert_allclose(state_a.domain_randomization.tendon_stiffness, 0.4)
+    np.testing.assert_allclose(state_a.domain_randomization.tendon_damping, 0.5)
+    np.testing.assert_allclose(state_a.domain_randomization.tendon_armature, 0.06)
+    np.testing.assert_allclose(state_a.domain_randomization.tendon_frictionloss, 0.07)
     np.testing.assert_allclose(state_a.domain_randomization.gravity_z, -4.0)
 
 
@@ -469,9 +487,18 @@ def _fixed_randomized_env(*, realistic: bool) -> MjxNodeVelocityEnv:
                 body_mass_multiplier_range=(2.0, 2.0),
                 body_inertia_multiplier_range=(3.0, 3.0),
                 dof_damping_multiplier_range=(4.0, 4.0),
+                dof_armature_range=(0.02, 0.02),
+                dof_frictionloss_range=(0.03, 0.03),
                 actuator_gain_multiplier_range=(5.0, 5.0),
                 actuator_bias_multiplier_range=(6.0, 6.0),
+                actuator_dynprm_multiplier_range=(7.0, 7.0),
                 geom_friction_slide_range=(0.25, 0.25),
+                geom_friction_torsional_range=(0.05, 0.05),
+                geom_friction_rolling_range=(0.01, 0.01),
+                tendon_stiffness_range=(0.4, 0.4),
+                tendon_damping_range=(0.5, 0.5),
+                tendon_armature_range=(0.06, 0.06),
+                tendon_frictionloss_range=(0.07, 0.07),
                 gravity_z_range=(-4.0, -4.0),
             ),
         )
@@ -484,9 +511,18 @@ def _cpu_randomized_mjx_model(*, realistic: bool) -> mjx.Model:
     model.body_mass[:] *= 2.0
     model.body_inertia[:] *= 3.0
     model.dof_damping[:] *= 4.0
+    model.dof_armature[:] = 0.02
+    model.dof_frictionloss[:] = 0.03
     model.actuator_gainprm[:] *= 5.0
     model.actuator_biasprm[:] *= 6.0
+    model.actuator_dynprm[:] *= 7.0
     model.geom_friction[:, 0] = 0.25
+    model.geom_friction[:, 1] = 0.05
+    model.geom_friction[:, 2] = 0.01
+    model.tendon_stiffness[:] = 0.4
+    model.tendon_damping[:] = 0.5
+    model.tendon_armature[:] = 0.06
+    model.tendon_frictionloss[:] = 0.07
     model.opt.gravity[2] = -4.0
     mujoco.mj_setConst(model, data)
     return mjx.put_model(model)
@@ -499,9 +535,18 @@ def test_mjx_domain_randomization_model_patch_matches_cpu_setconst_for_abstract_
         body_mass_multiplier=jnp.asarray(2.0),
         body_inertia_multiplier=jnp.asarray(3.0),
         dof_damping_multiplier=jnp.asarray(4.0),
+        dof_armature=jnp.asarray(0.02),
+        dof_frictionloss=jnp.asarray(0.03),
         actuator_gain_multiplier=jnp.asarray(5.0),
         actuator_bias_multiplier=jnp.asarray(6.0),
+        actuator_dynprm_multiplier=jnp.asarray(7.0),
         geom_friction_slide=jnp.asarray(0.25),
+        geom_friction_torsional=jnp.asarray(0.05),
+        geom_friction_rolling=jnp.asarray(0.01),
+        tendon_stiffness=jnp.asarray(0.4),
+        tendon_damping=jnp.asarray(0.5),
+        tendon_armature=jnp.asarray(0.06),
+        tendon_frictionloss=jnp.asarray(0.07),
         gravity_z=jnp.asarray(-4.0),
     )
     actual = env._model_for_domain(domain)
@@ -513,15 +558,26 @@ def test_mjx_domain_randomization_model_patch_matches_cpu_setconst_for_abstract_
         "body_inertia",
         "body_invweight0",
         "dof_damping",
+        "dof_armature",
+        "dof_frictionloss",
         "dof_invweight0",
         "dof_M0",
         "tendon_invweight0",
         "actuator_gainprm",
         "actuator_biasprm",
-        "actuator_acc0",
+        "actuator_dynprm",
         "geom_friction",
+        "tendon_stiffness",
+        "tendon_damping",
+        "tendon_armature",
+        "tendon_frictionloss",
     ):
-        np.testing.assert_allclose(getattr(actual, field), getattr(expected, field), rtol=1e-6)
+        np.testing.assert_allclose(
+            getattr(actual, field),
+            getattr(expected, field),
+            rtol=1e-6,
+            err_msg=field,
+        )
     np.testing.assert_allclose(actual.opt.gravity, expected.opt.gravity)
 
 

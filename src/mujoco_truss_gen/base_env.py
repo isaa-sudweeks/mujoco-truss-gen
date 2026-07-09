@@ -38,9 +38,18 @@ class DomainRandomizationConfig:
     body_mass_multiplier_range: Range | None = None
     body_inertia_multiplier_range: Range | None = None
     dof_damping_multiplier_range: Range | None = None
+    dof_armature_range: Range | None = None
+    dof_frictionloss_range: Range | None = None
     actuator_gain_multiplier_range: Range | None = None
     actuator_bias_multiplier_range: Range | None = None
+    actuator_dynprm_multiplier_range: Range | None = None
     geom_friction_slide_range: Range | None = None
+    geom_friction_torsional_range: Range | None = None
+    geom_friction_rolling_range: Range | None = None
+    tendon_stiffness_range: Range | None = None
+    tendon_damping_range: Range | None = None
+    tendon_armature_range: Range | None = None
+    tendon_frictionloss_range: Range | None = None
     gravity_z_range: Range | None = None
 
 
@@ -148,9 +157,16 @@ class MujocoTrussEnv(gym.Env):
             "body_mass": model.body_mass.copy(),
             "body_inertia": model.body_inertia.copy(),
             "dof_damping": model.dof_damping.copy(),
+            "dof_armature": model.dof_armature.copy(),
+            "dof_frictionloss": model.dof_frictionloss.copy(),
             "actuator_gainprm": model.actuator_gainprm.copy(),
             "actuator_biasprm": model.actuator_biasprm.copy(),
+            "actuator_dynprm": model.actuator_dynprm.copy(),
             "geom_friction": model.geom_friction.copy(),
+            "tendon_stiffness": model.tendon_stiffness.copy(),
+            "tendon_damping": model.tendon_damping.copy(),
+            "tendon_armature": model.tendon_armature.copy(),
+            "tendon_frictionloss": model.tendon_frictionloss.copy(),
             "gravity": model.opt.gravity.copy(),
         }
 
@@ -162,9 +178,16 @@ class MujocoTrussEnv(gym.Env):
         model.body_mass[:] = self._runtime_nominals["body_mass"]
         model.body_inertia[:] = self._runtime_nominals["body_inertia"]
         model.dof_damping[:] = self._runtime_nominals["dof_damping"]
+        model.dof_armature[:] = self._runtime_nominals["dof_armature"]
+        model.dof_frictionloss[:] = self._runtime_nominals["dof_frictionloss"]
         model.actuator_gainprm[:] = self._runtime_nominals["actuator_gainprm"]
         model.actuator_biasprm[:] = self._runtime_nominals["actuator_biasprm"]
+        model.actuator_dynprm[:] = self._runtime_nominals["actuator_dynprm"]
         model.geom_friction[:] = self._runtime_nominals["geom_friction"]
+        model.tendon_stiffness[:] = self._runtime_nominals["tendon_stiffness"]
+        model.tendon_damping[:] = self._runtime_nominals["tendon_damping"]
+        model.tendon_armature[:] = self._runtime_nominals["tendon_armature"]
+        model.tendon_frictionloss[:] = self._runtime_nominals["tendon_frictionloss"]
         model.opt.gravity[:] = self._runtime_nominals["gravity"]
 
     def _apply_runtime_domain_randomization(
@@ -206,6 +229,24 @@ class MujocoTrussEnv(gym.Env):
             )
             samples["dof_damping_multiplier"] = dof_damping_multiplier
 
+        dof_armature = _sample_range(
+            self.np_random,
+            randomization.dof_armature_range,
+            "dof_armature_range",
+        )
+        if dof_armature is not None:
+            model.dof_armature[:] = dof_armature
+            samples["dof_armature"] = dof_armature
+
+        dof_frictionloss = _sample_range(
+            self.np_random,
+            randomization.dof_frictionloss_range,
+            "dof_frictionloss_range",
+        )
+        if dof_frictionloss is not None:
+            model.dof_frictionloss[:] = dof_frictionloss
+            samples["dof_frictionloss"] = dof_frictionloss
+
         actuator_gain_multiplier = _sample_range(
             self.np_random,
             randomization.actuator_gain_multiplier_range,
@@ -228,6 +269,17 @@ class MujocoTrussEnv(gym.Env):
             )
             samples["actuator_bias_multiplier"] = actuator_bias_multiplier
 
+        actuator_dynprm_multiplier = _sample_range(
+            self.np_random,
+            randomization.actuator_dynprm_multiplier_range,
+            "actuator_dynprm_multiplier_range",
+        )
+        if actuator_dynprm_multiplier is not None:
+            model.actuator_dynprm[:] = (
+                self._runtime_nominals["actuator_dynprm"] * actuator_dynprm_multiplier
+            )
+            samples["actuator_dynprm_multiplier"] = actuator_dynprm_multiplier
+
         geom_friction_slide = _sample_range(
             self.np_random,
             randomization.geom_friction_slide_range,
@@ -236,6 +288,60 @@ class MujocoTrussEnv(gym.Env):
         if geom_friction_slide is not None:
             model.geom_friction[:, 0] = geom_friction_slide
             samples["geom_friction_slide"] = geom_friction_slide
+
+        geom_friction_torsional = _sample_range(
+            self.np_random,
+            randomization.geom_friction_torsional_range,
+            "geom_friction_torsional_range",
+        )
+        if geom_friction_torsional is not None:
+            model.geom_friction[:, 1] = geom_friction_torsional
+            samples["geom_friction_torsional"] = geom_friction_torsional
+
+        geom_friction_rolling = _sample_range(
+            self.np_random,
+            randomization.geom_friction_rolling_range,
+            "geom_friction_rolling_range",
+        )
+        if geom_friction_rolling is not None:
+            model.geom_friction[:, 2] = geom_friction_rolling
+            samples["geom_friction_rolling"] = geom_friction_rolling
+
+        tendon_stiffness = _sample_range(
+            self.np_random,
+            randomization.tendon_stiffness_range,
+            "tendon_stiffness_range",
+        )
+        if tendon_stiffness is not None:
+            model.tendon_stiffness[:] = tendon_stiffness
+            samples["tendon_stiffness"] = tendon_stiffness
+
+        tendon_damping = _sample_range(
+            self.np_random,
+            randomization.tendon_damping_range,
+            "tendon_damping_range",
+        )
+        if tendon_damping is not None:
+            model.tendon_damping[:] = tendon_damping
+            samples["tendon_damping"] = tendon_damping
+
+        tendon_armature = _sample_range(
+            self.np_random,
+            randomization.tendon_armature_range,
+            "tendon_armature_range",
+        )
+        if tendon_armature is not None:
+            model.tendon_armature[:] = tendon_armature
+            samples["tendon_armature"] = tendon_armature
+
+        tendon_frictionloss = _sample_range(
+            self.np_random,
+            randomization.tendon_frictionloss_range,
+            "tendon_frictionloss_range",
+        )
+        if tendon_frictionloss is not None:
+            model.tendon_frictionloss[:] = tendon_frictionloss
+            samples["tendon_frictionloss"] = tendon_frictionloss
 
         gravity_z = _sample_range(
             self.np_random,

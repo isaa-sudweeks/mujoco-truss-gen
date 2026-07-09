@@ -892,7 +892,16 @@ def test_env_runtime_domain_randomization_restores_nominals_between_resets() -> 
             domain_randomization=DomainRandomizationConfig(
                 body_mass_multiplier_range=(2.0, 2.0),
                 body_inertia_multiplier_range=(3.0, 3.0),
+                dof_armature_range=(0.02, 0.02),
+                dof_frictionloss_range=(0.03, 0.03),
+                actuator_dynprm_multiplier_range=(4.0, 4.0),
                 geom_friction_slide_range=(0.25, 0.25),
+                geom_friction_torsional_range=(0.05, 0.05),
+                geom_friction_rolling_range=(0.01, 0.01),
+                tendon_stiffness_range=(0.4, 0.4),
+                tendon_damping_range=(0.5, 0.5),
+                tendon_armature_range=(0.06, 0.06),
+                tendon_frictionloss_range=(0.07, 0.07),
                 gravity_z_range=(-4.0, -4.0),
             ),
         )
@@ -900,17 +909,36 @@ def test_env_runtime_domain_randomization_restores_nominals_between_resets() -> 
     try:
         nominal_mass = env.mj_model.model.body_mass.copy()
         nominal_inertia = env.mj_model.model.body_inertia.copy()
+        nominal_actuator_dynprm = env.mj_model.model.actuator_dynprm.copy()
 
         _, info = env.reset(seed=1)
         np.testing.assert_allclose(env.mj_model.model.body_mass, nominal_mass * 2.0)
         np.testing.assert_allclose(env.mj_model.model.body_inertia, nominal_inertia * 3.0)
+        np.testing.assert_allclose(env.mj_model.model.dof_armature, 0.02)
+        np.testing.assert_allclose(env.mj_model.model.dof_frictionloss, 0.03)
+        np.testing.assert_allclose(
+            env.mj_model.model.actuator_dynprm,
+            nominal_actuator_dynprm * 4.0,
+        )
         np.testing.assert_allclose(env.mj_model.model.geom_friction[:, 0], 0.25)
+        np.testing.assert_allclose(env.mj_model.model.geom_friction[:, 1], 0.05)
+        np.testing.assert_allclose(env.mj_model.model.geom_friction[:, 2], 0.01)
+        np.testing.assert_allclose(env.mj_model.model.tendon_stiffness, 0.4)
+        np.testing.assert_allclose(env.mj_model.model.tendon_damping, 0.5)
+        np.testing.assert_allclose(env.mj_model.model.tendon_armature, 0.06)
+        np.testing.assert_allclose(env.mj_model.model.tendon_frictionloss, 0.07)
         assert env.mj_model.model.opt.gravity[2] == pytest.approx(-4.0)
         assert info["domain_randomization"]["body_mass_multiplier"] == pytest.approx(2.0)
+        assert info["domain_randomization"]["dof_armature"] == pytest.approx(0.02)
+        assert info["domain_randomization"]["geom_friction_torsional"] == pytest.approx(0.05)
+        assert info["domain_randomization"]["tendon_stiffness"] == pytest.approx(0.4)
+        assert info["domain_randomization"]["actuator_dynprm_multiplier"] == pytest.approx(4.0)
 
         env.reset(seed=2)
         np.testing.assert_allclose(env.mj_model.model.body_mass, nominal_mass * 2.0)
         np.testing.assert_allclose(env.mj_model.model.body_inertia, nominal_inertia * 3.0)
+        np.testing.assert_allclose(env.mj_model.model.dof_armature, 0.02)
+        np.testing.assert_allclose(env.mj_model.model.tendon_frictionloss, 0.07)
     finally:
         env.close()
 
