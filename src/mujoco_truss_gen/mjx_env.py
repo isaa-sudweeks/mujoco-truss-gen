@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -71,6 +72,18 @@ class MjxNodeVelocityEnv:
 
         self.mujoco_model = MujocoModel(self.config.model_source)
         model = self.mujoco_model.model
+        if (
+            self._domain_randomization is not None
+            and self._domain_randomization.dof_damping_multiplier_range is not None
+            and not np.any(model.dof_damping)
+        ):
+            warnings.warn(
+                "dof_damping_multiplier_range has no effect because the model's "
+                "nominal dof_damping array is entirely zero; configure nominal joint "
+                "damping or omit this randomization range.",
+                UserWarning,
+                stacklevel=2,
+            )
         self._angle_bisector_controller = MjxAngleBisectorController(
             self.mujoco_model.angle_bisector_controller.targets
         )
@@ -109,7 +122,10 @@ class MjxNodeVelocityEnv:
         const_data_template = mjx.forward(self.mjx_model, self._data_template)
         self._tendon_jacobian0 = const_data_template._impl.ten_J
         self._actuator_moment0 = const_data_template._impl.actuator_moment
-        self._qM0 = const_data_template._impl.qM
+        # MJX stores qM densely for small models and in MuJoCo's packed sparse
+        # representation for larger models.  The domain-randomization helpers
+        # below operate on the full matrix in either case.
+        self._qM0 = mjx.full_m(self.mjx_model, const_data_template)
         self._nominal_qm_physical = self._nominal_physical_mass_matrix()
         self._actuator_acc0_scale = self._nominal_actuator_acc0_scale()
 

@@ -943,6 +943,19 @@ def test_env_runtime_domain_randomization_restores_nominals_between_resets() -> 
         env.close()
 
 
+def test_env_warns_when_dof_damping_multiplier_targets_all_zeros() -> None:
+    with pytest.warns(UserWarning, match="dof_damping_multiplier_range has no effect"):
+        env = MujocoTrussEnv(
+            TrussEnvConfig(
+                get_mujoco_spec("octahedron", realistic=False),
+                domain_randomization=DomainRandomizationConfig(
+                    dof_damping_multiplier_range=(0.8, 1.2)
+                ),
+            )
+        )
+    env.close()
+
+
 def test_preset_scale_must_be_positive() -> None:
     with pytest.raises(ValueError, match="scale must be greater than zero"):
         get_preset_definition("octahedron", scale=0.0)

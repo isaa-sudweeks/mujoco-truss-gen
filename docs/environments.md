@@ -73,7 +73,7 @@ from mujoco_truss_gen import (
     get_mujoco_spec,
 )
 
-spec = get_mujoco_spec("octahedron", realistic=False)
+spec = get_mujoco_spec("octahedron", realistic=True)
 env = MujocoTrussEnv(
     TrussEnvConfig(
         spec,
@@ -102,9 +102,15 @@ obs, info = env.reset(seed=1)
 print(info["domain_randomization"])
 ```
 
-Mass and inertia ranges are global multipliers: they scale the existing model
-arrays and preserve active/passive/component mass ratios. Zero-default DOF and
-tendon fields use absolute sampled values. Runtime randomization intentionally
+Mass, inertia, and DOF damping ranges are global multipliers: they scale the
+existing model arrays and preserve their nominal ratios. A DOF damping
+multiplier has no effect when every nominal damping value is zero; constructing
+an environment with that combination emits a warning. The simplified built-in
+tetrahedron, octahedron, and icosahedron presets (`realistic=False`) have zero
+nominal DOF damping, while their realistic variants have nonzero hinge damping.
+Configure nominal joint damping or use a realistic preset when randomizing this
+multiplier. Other zero-default DOF and tendon fields use absolute sampled
+values. Runtime randomization intentionally
 does not change actuator control ranges, force ranges, action-space bounds, or
 the reset `qpos`/`qvel` perturbation.
 

@@ -96,6 +96,13 @@ def test_mjx_node_velocity_env_constructs_for_canonical_abstract_presets(
     assert env.action_high.shape == (env.action_size,)
 
 
+def test_mjx_node_velocity_env_constructs_with_sparse_mass_matrix() -> None:
+    env = MjxNodeVelocityEnv(get_mujoco_spec("octahedron", realistic=True))
+
+    assert env._qM0.shape == (env.mjx_model.nv, env.mjx_model.nv)
+    assert env._nominal_qm_physical.shape == (env.mjx_model.nv, env.mjx_model.nv)
+
+
 def test_mjx_reset_is_batched_deterministic_and_initializes_actuators(
     compiled_env: CompiledEnv,
 ) -> None:
@@ -447,6 +454,18 @@ def test_mjx_domain_randomization_reset_is_deterministic_and_batched() -> None:
     np.testing.assert_allclose(state_a.domain_randomization.tendon_armature, 0.06)
     np.testing.assert_allclose(state_a.domain_randomization.tendon_frictionloss, 0.07)
     np.testing.assert_allclose(state_a.domain_randomization.gravity_z, -4.0)
+
+
+def test_mjx_warns_when_dof_damping_multiplier_targets_all_zeros() -> None:
+    with pytest.warns(UserWarning, match="dof_damping_multiplier_range has no effect"):
+        MjxNodeVelocityEnv(
+            TrussEnvConfig(
+                get_mujoco_spec("octahedron", realistic=False),
+                domain_randomization=DomainRandomizationConfig(
+                    dof_damping_multiplier_range=(0.8, 1.2)
+                ),
+            )
+        )
 
 
 def test_mjx_domain_randomization_reset_where_only_resamples_masked_elements() -> None:

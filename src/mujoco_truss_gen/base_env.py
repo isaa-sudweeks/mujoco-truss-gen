@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -123,6 +124,7 @@ class MujocoTrussEnv(gym.Env):
 
     def _on_model_changed(self) -> None:
         self._capture_runtime_nominals()
+        self._warn_if_dof_damping_multiplier_is_ineffective()
         self._set_render_fps()
         self._define_action_space()
         self._define_observation_space()
@@ -169,6 +171,21 @@ class MujocoTrussEnv(gym.Env):
             "tendon_frictionloss": model.tendon_frictionloss.copy(),
             "gravity": model.opt.gravity.copy(),
         }
+
+    def _warn_if_dof_damping_multiplier_is_ineffective(self) -> None:
+        randomization = self.config.domain_randomization
+        if (
+            randomization is not None
+            and randomization.dof_damping_multiplier_range is not None
+            and not np.any(self._runtime_nominals["dof_damping"])
+        ):
+            warnings.warn(
+                "dof_damping_multiplier_range has no effect because the model's "
+                "nominal dof_damping array is entirely zero; configure nominal joint "
+                "damping or omit this randomization range.",
+                UserWarning,
+                stacklevel=3,
+            )
 
     def _restore_runtime_nominals(self) -> None:
         if not self._runtime_nominals:
