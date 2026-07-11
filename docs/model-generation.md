@@ -92,7 +92,9 @@ caller.
   bodies, sites, tendons, actuators, and perimeter constraints to an existing
   spec.
 - `build_shapes(spec, node_dict, shape_dict, realistic=False)` adds routed
-  continuous-tube shapes with unconstrained per-edge tendon actuators. With
+  continuous-tube shapes with per-edge tendon actuators and a soft equality
+  constraint on each route's initial total length. Set
+  `disable_route_length_constraint=True` on a shape to opt out. With
   `realistic=True`, shared routed node occurrences are cloned and connected to
   connector balls by in-plane bisector rods.
 - `get_mujoco_spec("octahedron", realistic=False, scale=1.0)` and the other

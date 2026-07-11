@@ -1561,7 +1561,7 @@ def test_routed_shape_spec_compiles_and_runs() -> None:
     spec = get_mujoco_spec(node_dict, shape_dict, realistic=False)
     assert get_edge_index(spec).shape == (2, 8)
     root = ET.fromstring(spec.to_xml())
-    assert root.find(".//equality/tendon[@name='Route_Length_Constraint_quad_1']") is None
+    assert root.find(".//equality/tendon[@name='Route_Length_Constraint_quad_1']") is not None
     actuator_names = {actuator.get("name") for actuator in root.findall(".//actuator/general")}
     assert actuator_names == {"act_12", "act_23", "act_34", "act_14"}
 
@@ -2489,14 +2489,115 @@ def test_routed_shape_generation_does_not_mutate_custom_dictionaries() -> None:
     assert shape_dict == original_shapes
 
 
-def test_tetrahedron_routed_shape_has_no_route_constraints() -> None:
-    spec = get_mujoco_spec("tetrahedron", realistic=False)
+@pytest.mark.parametrize("realistic", [False, True])
+def test_tetrahedron_routed_shape_has_route_constraints(realistic: bool) -> None:
+    spec = get_mujoco_spec("tetrahedron", realistic=realistic)
     model = spec.compile()
     data = mujoco.MjData(model)
 
     mujoco.mj_forward(model, data)
 
-    assert data.nefc == 0
+    route_constraint_names = {
+        model.equality(index).name
+        for index in range(model.neq)
+        if model.equality(index).name.startswith("Route_Length_Constraint_")
+    }
+    assert route_constraint_names == {
+        "Route_Length_Constraint_path_1",
+        "Route_Length_Constraint_path_2",
+    }
+    assert data.nefc >= 2
+
+
+@pytest.mark.parametrize(
+    ("realistic", "maximum_route_error", "maximum_joint_speed"),
+    [(False, 0.15, 2.0), (True, 0.03, 30.0)],
+)
+def test_route_length_constraint_remains_finite_after_actuator_saturation(
+    realistic: bool,
+    maximum_route_error: float,
+    maximum_joint_speed: float,
+) -> None:
+    model = MujocoModel(get_mujoco_spec("tetrahedron", realistic=realistic))
+    controller = NodeVelocityController(
+        model.model,
+        model.xml,
+        model.node_names,
+        model.site_to_node,
+        model.external_actuator_ids,
+    )
+    command = np.zeros(len(controller.node_names))
+    command[controller.node_index["node_2"]] = 0.05
+    route_ids = np.array(
+        [
+            tendon_id
+            for tendon_id in range(model.model.ntendon)
+            if model.model.tendon(tendon_id).name.startswith("route_")
+        ]
+    )
+    initial_lengths = model.data.ten_length[route_ids].copy()
+    largest_error = 0.0
+    largest_speed = 0.0
+
+    for _ in range(12_000):
+        controller.apply(model.model, model.data, command)
+        mujoco.mj_step(model.model, model.data)
+        largest_error = max(
+            largest_error,
+            float(np.max(np.abs(model.data.ten_length[route_ids] - initial_lengths))),
+        )
+        largest_speed = max(largest_speed, float(np.max(np.abs(model.data.qvel))))
+
+    activation_addresses = model.model.actuator_actadr[controller.actuator_ids]
+    assert np.min(model.data.act[activation_addresses]) == pytest.approx(0.0)
+    assert np.all(np.isfinite(model.data.qpos))
+    assert np.all(np.isfinite(model.data.qvel))
+    assert largest_error < maximum_route_error
+    assert largest_speed < maximum_joint_speed
+
+
+def test_route_length_constraint_rollout_is_supported_by_mjx() -> None:
+    import jax
+    import jax.numpy as jnp
+    from mujoco import mjx
+
+    model = MujocoModel(get_mujoco_spec("tetrahedron", realistic=False))
+    controller = NodeVelocityController(
+        model.model,
+        model.xml,
+        model.node_names,
+        model.site_to_node,
+        model.external_actuator_ids,
+    )
+    command = np.zeros(len(controller.node_names))
+    command[controller.node_index["node_2"]] = 0.05
+    ctrl = np.zeros(model.model.nu)
+    ctrl[model.external_actuator_ids] = controller.clipped_edge_commands(model.model, command)
+    route_ids = np.array(
+        [
+            tendon_id
+            for tendon_id in range(model.model.ntendon)
+            if model.model.tendon(tendon_id).name.startswith("route_")
+        ]
+    )
+    initial_lengths = jnp.asarray(model.data.ten_length[route_ids])
+    mjx_model = mjx.put_model(model.model)
+    mjx_data = mjx.put_data(model.model, model.data).replace(ctrl=jnp.asarray(ctrl))
+
+    def rollout(data):
+        def step(carry, _):
+            carry = mjx.step(mjx_model, carry)
+            error = jnp.max(jnp.abs(carry.ten_length[jnp.asarray(route_ids)] - initial_lengths))
+            return carry, error
+
+        return jax.lax.scan(step, data, None, length=12_000)
+
+    final_data, route_errors = jax.jit(rollout)(mjx_data)
+
+    assert float(jnp.min(final_data.act)) == pytest.approx(0.0)
+    assert bool(jnp.all(jnp.isfinite(final_data.qpos)))
+    assert bool(jnp.all(jnp.isfinite(final_data.qvel)))
+    assert float(jnp.max(route_errors)) < 0.15
 
 
 def test_actuator_names_are_edge_based() -> None:

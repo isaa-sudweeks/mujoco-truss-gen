@@ -62,7 +62,7 @@ ACTUATOR_CTRL_RANGE = [-0.1, 0.1]
 # Default integrator activation range for tendon actuators.
 DEFAULT_ACTUATOR_RANGE = [0.0, 3.0]
 # Proportional gain for abstract tendon actuators.
-ABSTRACT_ACTUATOR_KP = 5000.0
+ABSTRACT_ACTUATOR_KP = 1000.0
 # Proportional gain for realistic tendon actuators.
 REALISTIC_ACTUATOR_KP = 1000.0
 # Critical damping ratio used when deriving tendon actuator damping.
@@ -93,6 +93,11 @@ ROUTE_CONSTRAINT_DATA = [0.0, 0.0, 0.0, 0.0, 0.0]
 TENDON_CONSTRAINT_SOLREF = [0.02, 1.0]
 # MuJoCo solimp values for tendon equality constraints.
 TENDON_CONSTRAINT_SOLIMP = [0.9, 0.95, 0.001]
+# MuJoCo solver parameters for continuous-route length equalities. These are
+# separate from triangle perimeter constraints because routed models can place
+# every edge under actuator control.
+ROUTE_LENGTH_CONSTRAINT_SOLREF = [0.01, 1.0]
+ROUTE_LENGTH_CONSTRAINT_SOLIMP = [0.95, 0.99, 0.001]
 # Default node color.
 NODE_RGBA = [0.18, 0.18, 0.18, 1.0]
 # Default connector rod color.
@@ -172,4 +177,10 @@ class TrussPhysicalParameters:
     )
     tendon_constraint_solimp: list[float] = field(
         default_factory=lambda: list(TENDON_CONSTRAINT_SOLIMP)
+    )
+    route_length_constraint_solref: list[float] = field(
+        default_factory=lambda: list(ROUTE_LENGTH_CONSTRAINT_SOLREF)
+    )
+    route_length_constraint_solimp: list[float] = field(
+        default_factory=lambda: list(ROUTE_LENGTH_CONSTRAINT_SOLIMP)
     )

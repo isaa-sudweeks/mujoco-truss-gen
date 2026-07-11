@@ -21,6 +21,7 @@ from mujoco_truss_gen.mujoco_model.constants import (
 )
 from mujoco_truss_gen.mujoco_model.constraints import (
     add_perimeter_constraint,
+    add_route_length_constraints,
 )
 from mujoco_truss_gen.mujoco_model.control_graph import (
     ControlGraphActuatorEdge,
@@ -355,6 +356,7 @@ def build_abstract_shapes(
     create_node_bodies(spec, node_dict, physical_params=params)
 
     edge_tendons: EdgeTendonMap = {}
+    route_tendons: dict[str, str] = {}
     actuated_tendons: set[str] = set()
     actuator_names: set[str] = set()
 
@@ -388,13 +390,15 @@ def build_abstract_shapes(
             )
             actuated_tendons.add(tendon_name)
 
-        add_route_tendon(
+        route_tendons[shape_name] = add_route_tendon(
             spec,
             shape_name,
             route,
             tendon_range=_upper_scaled_route_tendon_range(_route_length(node_dict, route), params),
             physical_params=params,
         )
+
+    add_route_length_constraints(spec, shape_dict, route_tendons, physical_params=params)
 
 
 def build_realistic_shapes(
@@ -461,6 +465,7 @@ def build_realistic_shapes(
         )
 
     edge_tendons: EdgeTendonMap = {}
+    route_tendons: dict[str, str] = {}
     actuated_tendons: set[str] = set()
     actuator_names: set[str] = set()
 
@@ -488,13 +493,15 @@ def build_realistic_shapes(
             )
             actuated_tendons.add(tendon_name)
 
-        add_route_tendon(
+        route_tendons[shape_name] = add_route_tendon(
             spec,
             shape_name,
             route,
             tendon_range=_upper_scaled_route_tendon_range(_route_length(node_dict, route), params),
             physical_params=params,
         )
+
+    add_route_length_constraints(spec, shape_dict, route_tendons, physical_params=params)
 
 
 def _routed_passive_nodes(shape_dict: ShapeDict) -> set[str]:

@@ -105,8 +105,9 @@ python -m mujoco_truss_gen.generate_mujoco_model
 On macOS, MuJoCo's passive viewer may require running viewer scripts with
 `mjpython` instead of the standard `python` executable.
 
-Routed continuous-tube presets such as `tetrahedron` are unconstrained
-all-edge-actuated models. They also support `realistic=True`, which clones
+Routed continuous-tube presets such as `tetrahedron` are all-edge-actuated models
+whose route tendons softly constrain each tube to its initial total length. They
+also support `realistic=True`, which clones
 shared routed node occurrences and connects them through in-plane bisector rods.
 Use `MujocoNodeVelocityCommandEnv` for node-level scalar velocity commands that
 are mapped through the route incidence matrix to edge actuator commands. For

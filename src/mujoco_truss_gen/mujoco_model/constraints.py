@@ -95,5 +95,5 @@ def add_route_length_constraints(
         )
         constraint.name1 = tendon_name
         constraint.data[:5] = ROUTE_CONSTRAINT_DATA
-        constraint.solref = params.tendon_constraint_solref
-        constraint.solimp[:3] = params.tendon_constraint_solimp
+        constraint.solref = params.route_length_constraint_solref
+        constraint.solimp[:3] = params.route_length_constraint_solimp
