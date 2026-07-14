@@ -39,6 +39,9 @@ class MjxDomainRandomizationState:
     tendon_armature: jax.Array
     tendon_frictionloss: jax.Array
     gravity_z: jax.Array
+    initial_translation_x: jax.Array
+    initial_translation_y: jax.Array
+    initial_yaw: jax.Array
 
 
 @jax.tree_util.register_dataclass
@@ -216,6 +219,21 @@ class MjxNodeVelocityEnv:
             if self._domain_randomization is not None
             else None
         )
+        self._initial_translation_x_range = self._jax_range(
+            self._domain_randomization.initial_translation_x_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._initial_translation_y_range = self._jax_range(
+            self._domain_randomization.initial_translation_y_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._initial_yaw_range = self._jax_range(
+            self._domain_randomization.initial_yaw_range
+            if self._domain_randomization is not None
+            else None
+        )
 
         self._passive_node_mask = jnp.asarray(self._controller.passive_node_mask)
         self._incidence_matrix = jnp.asarray(self._controller.incidence_matrix)
@@ -240,6 +258,19 @@ class MjxNodeVelocityEnv:
                 for node_name in self.mujoco_model.node_names
             ],
             dtype=jnp.int32,
+        )
+        free_qpos_adrs = self.mujoco_model.free_joint_qpos_adrs
+        self._pose_position_qpos_indices = jnp.asarray(
+            self.mujoco_model.pose_position_qpos_indices, dtype=jnp.int32
+        )
+        self._pose_position_offsets = jnp.asarray(
+            self.mujoco_model.pose_position_offsets, dtype=self._data_template.qpos.dtype
+        )
+        self._free_quaternion_qpos_indices = jnp.asarray(
+            free_qpos_adrs[:, None] + np.arange(3, 7)[None, :], dtype=jnp.int32
+        )
+        self._initial_node_centroid_xy = jnp.asarray(
+            self.mujoco_model.initial_node_centroid[:2], dtype=self._data_template.qpos.dtype
         )
         self._bbox_dimensions = jnp.asarray(self.mujoco_model.initial_bounding_box_dimensions)
         self._position_scale = float(max(self.mujoco_model.initial_bounding_box_diagonal, 1e-8))
@@ -297,9 +328,7 @@ class MjxNodeVelocityEnv:
             )
         if self._domain_randomization.tendon_frictionloss_range is not None:
             impl = impl.replace(
-                tendon_hasfrictionloss=np.ones_like(
-                    impl.tendon_hasfrictionloss, dtype=bool
-                )
+                tendon_hasfrictionloss=np.ones_like(impl.tendon_hasfrictionloss, dtype=bool)
             )
         self.mjx_model = self.mjx_model.replace(_impl=impl)
 
@@ -308,11 +337,7 @@ class MjxNodeVelocityEnv:
             jnp.square(self._tendon_jacobian0) * self.mjx_model.tendon_armature[:, None],
             axis=0,
         )
-        return (
-            self._qM0
-            - jnp.diag(self.mjx_model.dof_armature)
-            - jnp.diag(tendon_armature_diag)
-        )
+        return self._qM0 - jnp.diag(self.mjx_model.dof_armature) - jnp.diag(tendon_armature_diag)
 
     def _nominal_actuator_acc0_scale(self) -> jax.Array:
         nominal_inverse_qm = jnp.linalg.inv(self._qM0)
@@ -353,6 +378,9 @@ class MjxNodeVelocityEnv:
                 "tendon_armature_range",
                 "tendon_frictionloss_range",
                 "gravity_z_range",
+                "initial_translation_x_range",
+                "initial_translation_y_range",
+                "initial_yaw_range",
             ):
                 self._validate_range(getattr(randomization, name), name)
         if int(self.config.max_steps) <= 0:
@@ -439,6 +467,7 @@ class MjxNodeVelocityEnv:
             ),
             ctrl=jnp.zeros_like(self._data_template.ctrl),
         )
+        data = data.replace(qpos=self._apply_initial_pose(data.qpos, domain_randomization))
         data = mjx.forward(model, data)
         data = self._angle_bisector_controller.initialize(data)
         if self._reset_act_adrs.size:
@@ -486,7 +515,7 @@ class MjxNodeVelocityEnv:
         return self._get_obs_one(data, node_commands), next_state, reward, done, info
 
     def _sample_domain_randomization(self, key: jax.Array) -> MjxDomainRandomizationState:
-        keys = jax.random.split(key, 16)
+        keys = jax.random.split(key, 19)
         return MjxDomainRandomizationState(
             body_mass_multiplier=self._sample_jax_range(
                 keys[0], self._body_mass_multiplier_range, 1.0
@@ -521,9 +550,7 @@ class MjxNodeVelocityEnv:
                 self._geom_friction_rolling_range,
                 self.mjx_model.geom_friction[0, 2],
             ),
-            tendon_stiffness=self._sample_jax_range(
-                keys[11], self._tendon_stiffness_range, 0.0
-            ),
+            tendon_stiffness=self._sample_jax_range(keys[11], self._tendon_stiffness_range, 0.0),
             tendon_damping=self._sample_jax_range(keys[12], self._tendon_damping_range, 0.0),
             tendon_armature=self._sample_jax_range(keys[13], self._tendon_armature_range, 0.0),
             tendon_frictionloss=self._sample_jax_range(
@@ -532,6 +559,13 @@ class MjxNodeVelocityEnv:
             gravity_z=self._sample_jax_range(
                 keys[15], self._gravity_z_range, self._nominal_gravity_z
             ),
+            initial_translation_x=self._sample_jax_range(
+                keys[16], self._initial_translation_x_range, 0.0
+            ),
+            initial_translation_y=self._sample_jax_range(
+                keys[17], self._initial_translation_y_range, 0.0
+            ),
+            initial_yaw=self._sample_jax_range(keys[18], self._initial_yaw_range, 0.0),
         )
 
     def _nominal_domain_randomization_state(self) -> MjxDomainRandomizationState:
@@ -546,16 +580,57 @@ class MjxNodeVelocityEnv:
             actuator_bias_multiplier=jnp.asarray(1.0, dtype=dtype),
             actuator_dynprm_multiplier=jnp.asarray(1.0, dtype=dtype),
             geom_friction_slide=jnp.asarray(self.mjx_model.geom_friction[0, 0], dtype=dtype),
-            geom_friction_torsional=jnp.asarray(
-                self.mjx_model.geom_friction[0, 1], dtype=dtype
-            ),
+            geom_friction_torsional=jnp.asarray(self.mjx_model.geom_friction[0, 1], dtype=dtype),
             geom_friction_rolling=jnp.asarray(self.mjx_model.geom_friction[0, 2], dtype=dtype),
             tendon_stiffness=jnp.asarray(0.0, dtype=dtype),
             tendon_damping=jnp.asarray(0.0, dtype=dtype),
             tendon_armature=jnp.asarray(0.0, dtype=dtype),
             tendon_frictionloss=jnp.asarray(0.0, dtype=dtype),
             gravity_z=jnp.asarray(self._nominal_gravity_z, dtype=dtype),
+            initial_translation_x=jnp.asarray(0.0, dtype=dtype),
+            initial_translation_y=jnp.asarray(0.0, dtype=dtype),
+            initial_yaw=jnp.asarray(0.0, dtype=dtype),
         )
+
+    def _apply_initial_pose(
+        self,
+        qpos: jax.Array,
+        domain: MjxDomainRandomizationState,
+    ) -> jax.Array:
+        positions = self._pose_position_offsets + qpos[self._pose_position_qpos_indices]
+        cosine = jnp.cos(domain.initial_yaw)
+        sine = jnp.sin(domain.initial_yaw)
+        rotation = jnp.stack([jnp.stack([cosine, -sine]), jnp.stack([sine, cosine])])
+        xy = (positions[:, :2] - self._initial_node_centroid_xy) @ rotation.T
+        translation = jnp.stack([domain.initial_translation_x, domain.initial_translation_y])
+        positions = positions.at[:, :2].set(xy + self._initial_node_centroid_xy + translation)
+        qpos = qpos.at[self._pose_position_qpos_indices].set(
+            positions - self._pose_position_offsets
+        )
+
+        orientations = qpos[self._free_quaternion_qpos_indices]
+        half_yaw = domain.initial_yaw / 2.0
+        yaw_quaternion = jnp.stack(
+            [
+                jnp.cos(half_yaw),
+                jnp.asarray(0.0, dtype=qpos.dtype),
+                jnp.asarray(0.0, dtype=qpos.dtype),
+                jnp.sin(half_yaw),
+            ]
+        )
+        w1, x1, y1, z1 = yaw_quaternion
+        w2, x2, y2, z2 = orientations.T
+        rotated = jnp.stack(
+            [
+                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+                w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+                w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+                w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+            ],
+            axis=-1,
+        )
+        rotated = rotated / jnp.linalg.norm(rotated, axis=-1, keepdims=True)
+        return qpos.at[self._free_quaternion_qpos_indices].set(rotated)
 
     def _model_for_domain(self, domain: MjxDomainRandomizationState) -> mjx.Model:
         model = self.mjx_model
@@ -605,9 +680,7 @@ class MjxNodeVelocityEnv:
             )
         if self._geom_friction_torsional_range is not None:
             model = model.replace(
-                geom_friction=model.geom_friction.at[:, 1].set(
-                    domain.geom_friction_torsional
-                )
+                geom_friction=model.geom_friction.at[:, 1].set(domain.geom_friction_torsional)
             )
         if self._geom_friction_rolling_range is not None:
             model = model.replace(

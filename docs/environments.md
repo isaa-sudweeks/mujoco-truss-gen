@@ -66,6 +66,8 @@ Runtime randomization mutates fields on the compiled MuJoCo model and is the
 cheapest option:
 
 ```python
+import numpy as np
+
 from mujoco_truss_gen import (
     DomainRandomizationConfig,
     MujocoTrussEnv,
@@ -94,6 +96,9 @@ env = MujocoTrussEnv(
             tendon_armature_range=(0.0, 0.02),
             tendon_frictionloss_range=(0.0, 0.05),
             gravity_z_range=(-10.5, -8.8),
+            initial_translation_x_range=(-0.5, 0.5),
+            initial_translation_y_range=(-0.5, 0.5),
+            initial_yaw_range=(-np.pi, np.pi),
         ),
     )
 )
@@ -159,6 +164,13 @@ env = MujocoTrussEnv(
 When using vectorized Gymnasium environments, give each worker the same
 randomization config. Each worker samples independently at reset, while the
 vectorized setup provides parallel training throughput.
+
+Initial-pose ranges apply one rigid planar transform at every reset. Translation
+uses MuJoCo world-length units and yaw uses radians. Yaw is about world Z through
+the nominal node-position centroid, so relative geometry, node heights, and the
+selected ground-contact face are preserved. Omit any range to disable that
+component. MJX samples the three values independently for each batch element;
+`reset_where` changes them only for masked elements.
 
 ## Step and Reset Behavior
 

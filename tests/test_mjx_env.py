@@ -498,6 +498,45 @@ def test_mjx_domain_randomization_reset_where_only_resamples_masked_elements() -
     )
 
 
+def test_mjx_initial_pose_randomization_is_rigid_jitted_and_masked() -> None:
+    config = TrussEnvConfig(
+        get_mujoco_spec("tetrahedron", realistic=False),
+        domain_randomization=DomainRandomizationConfig(
+            initial_translation_x_range=(0.5, 0.5),
+            initial_translation_y_range=(-0.25, -0.25),
+            initial_yaw_range=(np.pi / 2.0, np.pi / 2.0),
+        ),
+    )
+    env = MjxNodeVelocityEnv(config)
+    nominal_env = MjxNodeVelocityEnv(
+        TrussEnvConfig(get_mujoco_spec("tetrahedron", realistic=False))
+    )
+    keys = _keys(41, batch_size=3)
+    _, state = jax.jit(env.reset)(keys)
+    _, nominal_state = jax.jit(nominal_env.reset)(keys)
+
+    np.testing.assert_allclose(state.domain_randomization.initial_translation_x, 0.5)
+    np.testing.assert_allclose(state.domain_randomization.initial_translation_y, -0.25)
+    np.testing.assert_allclose(state.domain_randomization.initial_yaw, np.pi / 2.0)
+    positions = np.asarray(state.data.xpos[:, env._node_body_ids])
+    nominal_positions = np.asarray(nominal_state.data.xpos[:, nominal_env._node_body_ids])
+    np.testing.assert_allclose(positions[..., 2], nominal_positions[..., 2], atol=1e-6)
+    np.testing.assert_allclose(
+        np.linalg.norm(positions[:, :, None] - positions[:, None, :], axis=-1),
+        np.linalg.norm(nominal_positions[:, :, None] - nominal_positions[:, None, :], axis=-1),
+        atol=2e-6,
+    )
+
+    _, merged = jax.jit(env.reset_where)(
+        _keys(42, batch_size=3), state, jnp.array([True, False, True])
+    )
+    np.testing.assert_array_equal(merged.data.qpos[1], state.data.qpos[1])
+    np.testing.assert_array_equal(
+        merged.domain_randomization.initial_yaw[1],
+        state.domain_randomization.initial_yaw[1],
+    )
+
+
 def _fixed_randomized_env(*, realistic: bool) -> MjxNodeVelocityEnv:
     return MjxNodeVelocityEnv(
         TrussEnvConfig(
@@ -687,9 +726,7 @@ def test_mjx_env_rejects_unsupported_configuration_and_models(tmp_path: Path) ->
     MjxNodeVelocityEnv(
         TrussEnvConfig(
             spec,
-            domain_randomization=DomainRandomizationConfig(
-                body_mass_multiplier_range=(1.0, 1.0)
-            ),
+            domain_randomization=DomainRandomizationConfig(body_mass_multiplier_range=(1.0, 1.0)),
         )
     )
 

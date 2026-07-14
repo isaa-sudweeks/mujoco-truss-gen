@@ -52,6 +52,9 @@ class DomainRandomizationConfig:
     tendon_armature_range: Range | None = None
     tendon_frictionloss_range: Range | None = None
     gravity_z_range: Range | None = None
+    initial_translation_x_range: Range | None = None
+    initial_translation_y_range: Range | None = None
+    initial_yaw_range: Range | None = None
 
 
 @dataclass(slots=True)
@@ -118,7 +121,12 @@ class MujocoTrussEnv(gym.Env):
     def reset(self, seed: int | None = None, options: dict[str, Any] | None = None):
         super().reset(seed=seed)
         randomization_info = self._randomize_domain()
-        self.mj_model.reset(self.np_random)
+        self.mj_model.reset(
+            self.np_random,
+            initial_translation_x=randomization_info.get("initial_translation_x", 0.0),
+            initial_translation_y=randomization_info.get("initial_translation_y", 0.0),
+            initial_yaw=randomization_info.get("initial_yaw", 0.0),
+        )
         self.steps = 0
         return self._get_obs(), {"domain_randomization": randomization_info}
 
@@ -230,9 +238,7 @@ class MujocoTrussEnv(gym.Env):
             "body_inertia_multiplier_range",
         )
         if body_inertia_multiplier is not None:
-            model.body_inertia[:] = (
-                self._runtime_nominals["body_inertia"] * body_inertia_multiplier
-            )
+            model.body_inertia[:] = self._runtime_nominals["body_inertia"] * body_inertia_multiplier
             samples["body_inertia_multiplier"] = body_inertia_multiplier
 
         dof_damping_multiplier = _sample_range(
@@ -241,9 +247,7 @@ class MujocoTrussEnv(gym.Env):
             "dof_damping_multiplier_range",
         )
         if dof_damping_multiplier is not None:
-            model.dof_damping[:] = (
-                self._runtime_nominals["dof_damping"] * dof_damping_multiplier
-            )
+            model.dof_damping[:] = self._runtime_nominals["dof_damping"] * dof_damping_multiplier
             samples["dof_damping_multiplier"] = dof_damping_multiplier
 
         dof_armature = _sample_range(
@@ -371,6 +375,19 @@ class MujocoTrussEnv(gym.Env):
 
         if samples:
             mujoco.mj_setConst(model, self.mj_model.data)
+
+        for field_name in (
+            "initial_translation_x",
+            "initial_translation_y",
+            "initial_yaw",
+        ):
+            value = _sample_range(
+                self.np_random,
+                getattr(randomization, f"{field_name}_range"),
+                f"{field_name}_range",
+            )
+            if value is not None:
+                samples[field_name] = value
 
         return samples
 

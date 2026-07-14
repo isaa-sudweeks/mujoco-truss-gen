@@ -57,9 +57,7 @@ from mujoco_truss_gen.mujoco_model.io_viewer import (
 
 def _default_compile_preset_names() -> list[str]:
     return [
-        preset_name
-        for preset_name in PRESETS
-        if not _is_indexed_henneberg_variant(preset_name)
+        preset_name for preset_name in PRESETS if not _is_indexed_henneberg_variant(preset_name)
     ]
 
 
@@ -196,13 +194,11 @@ def test_henneberg_graph_generation_counts_match_reference() -> None:
             len(graphs),
             sum(preset_module._minimum_trail_count(graph) == 1 for graph in graphs),
             sum(
-                graph.number_of_edges() % 2 == 0
-                and preset_module._minimum_trail_count(graph) == 2
+                graph.number_of_edges() % 2 == 0 and preset_module._minimum_trail_count(graph) == 2
                 for graph in graphs
             ),
             sum(
-                graph.number_of_edges() % 3 == 0
-                and preset_module._minimum_trail_count(graph) == 3
+                graph.number_of_edges() % 3 == 0 and preset_module._minimum_trail_count(graph) == 3
                 for graph in graphs
             ),
         )
@@ -269,8 +265,7 @@ def test_henneberg_routed_graph_presets_are_rigid_equal_route_covers() -> None:
         for shape in shape_dict.values():
             route = shape["route"]
             assert shape["active_edges"] == [
-                [from_node, to_node]
-                for from_node, to_node in zip(route, route[1:], strict=False)
+                [from_node, to_node] for from_node, to_node in zip(route, route[1:], strict=False)
             ]
             for from_node, to_node in zip(route, route[1:], strict=False):
                 from_index = int(from_node.removeprefix("node_")) - 1
@@ -731,9 +726,7 @@ def test_nonterminal_forward_reward_clips_normalized_com_velocity() -> None:
         )
         assert not terminated
         assert info["forward_velocity_normalized_raw"] > env.config.max_forward_velocity
-        assert info["forward_velocity_normalized"] == pytest.approx(
-            env.config.max_forward_velocity
-        )
+        assert info["forward_velocity_normalized"] == pytest.approx(env.config.max_forward_velocity)
         assert info["forward_velocity"] == pytest.approx(expected_physical_velocity)
         assert info["com_delta_x"] == pytest.approx(1.0)
         assert info["forward"] == pytest.approx(expected_forward)
@@ -941,6 +934,74 @@ def test_env_runtime_domain_randomization_restores_nominals_between_resets() -> 
         np.testing.assert_allclose(env.mj_model.model.tendon_frictionloss, 0.07)
     finally:
         env.close()
+
+
+def test_initial_pose_randomization_reports_fixed_samples() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            domain_randomization=DomainRandomizationConfig(
+                initial_translation_x_range=(0.4, 0.4),
+                initial_translation_y_range=(-0.3, -0.3),
+                initial_yaw_range=(math.pi / 3.0, math.pi / 3.0),
+            ),
+        )
+    )
+    try:
+        _, info = env.reset(seed=7)
+        samples = info["domain_randomization"]
+        assert samples["initial_translation_x"] == pytest.approx(0.4)
+        assert samples["initial_translation_y"] == pytest.approx(-0.3)
+        assert samples["initial_yaw"] == pytest.approx(math.pi / 3.0)
+    finally:
+        env.close()
+
+
+def test_initial_pose_is_one_rigid_xy_transform() -> None:
+    nominal = MujocoModel(get_mujoco_spec("tetrahedron", realistic=False))
+    transformed = MujocoModel(get_mujoco_spec("tetrahedron", realistic=False))
+    nominal.reset(np.random.default_rng(12))
+    transformed.reset(
+        np.random.default_rng(12),
+        initial_translation_x=0.6,
+        initial_translation_y=-0.25,
+        initial_yaw=math.pi / 2.0,
+    )
+
+    nominal_positions = nominal.get_node_position_matrix()
+    transformed_positions = transformed.get_node_position_matrix()
+    np.testing.assert_allclose(transformed_positions[:, 2], nominal_positions[:, 2], atol=1e-10)
+    np.testing.assert_allclose(
+        np.linalg.norm(transformed_positions[:, None] - transformed_positions[None, :], axis=-1),
+        np.linalg.norm(nominal_positions[:, None] - nominal_positions[None, :], axis=-1),
+        atol=1e-10,
+    )
+    expected_centroid = nominal.initial_node_centroid.copy()
+    jittered_offset = nominal_positions.mean(axis=0) - nominal.initial_node_centroid
+    expected_centroid[:2] += np.array([-jittered_offset[1], jittered_offset[0]])
+    expected_centroid[:2] += np.array([0.6, -0.25])
+    expected_centroid[2] += jittered_offset[2]
+    np.testing.assert_allclose(transformed_positions.mean(axis=0), expected_centroid, atol=1e-10)
+
+
+def test_initial_yaw_rotates_and_normalizes_realistic_free_joint_quaternions() -> None:
+    nominal = MujocoModel(get_mujoco_spec("octahedron", realistic=True))
+    transformed = MujocoModel(get_mujoco_spec("octahedron", realistic=True))
+    nominal.reset(np.random.default_rng(19))
+    transformed.reset(np.random.default_rng(19), initial_yaw=math.pi / 2.0)
+    yaw_quaternion = np.array([math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)])
+
+    assert transformed.free_joint_qpos_adrs.size > 0
+    for qpos_adr in transformed.free_joint_qpos_adrs:
+        expected = np.empty(4)
+        mujoco.mju_mulQuat(
+            expected,
+            yaw_quaternion,
+            nominal.data.qpos[qpos_adr + 3 : qpos_adr + 7],
+        )
+        actual = transformed.data.qpos[qpos_adr + 3 : qpos_adr + 7]
+        np.testing.assert_allclose(actual, expected, atol=1e-10)
+        np.testing.assert_allclose(np.linalg.norm(actual), 1.0, atol=1e-12)
 
 
 def test_env_warns_when_dof_damping_multiplier_targets_all_zeros() -> None:
@@ -1246,8 +1307,10 @@ def test_physical_parameters_override_generated_truss_values() -> None:
     np.testing.assert_allclose(_xml_vector(actuator.get("ctrlrange", "")), [-0.2, 0.2])
     np.testing.assert_allclose(_xml_vector(actuator.get("actrange", "")), [0.1, 1.7])
     np.testing.assert_allclose(_xml_vector(actuator.get("gainprm", ""))[:1], [1234.0])
-    expected_kv = 2.0 * params.actuator_dampratio * math.sqrt(
-        params.abstract_actuator_kp * params.realistic_actuator_nominal_mass
+    expected_kv = (
+        2.0
+        * params.actuator_dampratio
+        * math.sqrt(params.abstract_actuator_kp * params.realistic_actuator_nominal_mass)
     )
     np.testing.assert_allclose(
         _xml_vector(actuator.get("biasprm", ""))[1:3],
@@ -1692,29 +1755,21 @@ def test_realistic_routed_passive_cylinders_face_connector_rods() -> None:
         angular_actuator = root.find(
             f"./actuator/general[@name='bisector_angular_act_{node_name}']"
         )
-        roll_actuator = root.find(
-            f"./actuator/general[@name='bisector_roll_act_{node_name}']"
-        )
+        roll_actuator = root.find(f"./actuator/general[@name='bisector_roll_act_{node_name}']")
         if node_name in passive_nodes:
             assert angular_hinge is not None
-            assert float(angular_hinge.get("damping", "nan")) == pytest.approx(
-                HINGE_DAMPING
-            )
+            assert float(angular_hinge.get("damping", "nan")) == pytest.approx(HINGE_DAMPING)
             assert angular_actuator is not None
             assert angular_actuator.get("joint") == f"{node_name}_angular_hinge"
             assert roll_hinge is None
             assert roll_actuator is None
         else:
             assert angular_hinge is not None
-            assert float(angular_hinge.get("damping", "nan")) == pytest.approx(
-                HINGE_DAMPING
-            )
+            assert float(angular_hinge.get("damping", "nan")) == pytest.approx(HINGE_DAMPING)
             assert angular_actuator is not None
             assert angular_actuator.get("joint") == f"{node_name}_angular_hinge"
             assert roll_hinge is not None
-            assert float(roll_hinge.get("damping", "nan")) == pytest.approx(
-                HINGE_DAMPING
-            )
+            assert float(roll_hinge.get("damping", "nan")) == pytest.approx(HINGE_DAMPING)
             assert roll_actuator is not None
             assert roll_actuator.get("joint") == f"{node_name}_roll_hinge"
 
@@ -1738,9 +1793,7 @@ def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
                     ),
                 )[:2]
             )
-        neighbor_positions = [
-            model.data.site_xpos[site_id] for site_id in neighbor_site_ids
-        ]
+        neighbor_positions = [model.data.site_xpos[site_id] for site_id in neighbor_site_ids]
         if len(neighbor_positions) == 1:
             target_direction = _unit(node_pos - neighbor_positions[0])
             expected_dot = 1.0
@@ -1771,8 +1824,7 @@ def test_realistic_routed_connector_rods_start_on_angle_bisectors() -> None:
                 angle,
             )
             rod_direction = _unit(
-                parent_xmat
-                @ _rotate_about_axis(yawed_rod, yawed_angular_axis, angular_angle)
+                parent_xmat @ _rotate_about_axis(yawed_rod, yawed_angular_axis, angular_angle)
             )
             assert float(np.dot(rod_direction, target_direction)) == pytest.approx(
                 1.0,
@@ -1882,9 +1934,7 @@ def test_realistic_routed_roll_hinges_are_active_node_controlled_only() -> None:
             continue
 
         roll_hinge = node_body.find(f"./joint[@name='{node_name}_roll_hinge']")
-        roll_actuator = root.find(
-            f"./actuator/general[@name='bisector_roll_act_{node_name}']"
-        )
+        roll_actuator = root.find(f"./actuator/general[@name='bisector_roll_act_{node_name}']")
         if node_name in passive_nodes:
             assert roll_hinge is None
             assert roll_actuator is None
@@ -1955,9 +2005,7 @@ def test_realistic_routed_roll_hinge_tracks_live_nearest_neighbor_plane() -> Non
         yawed_angular_axis,
         angular_angle,
     )
-    rolled_normal = _unit(
-        _rotate_about_axis(pitched_normal, pitched_roll_axis, roll_angle)
-    )
+    rolled_normal = _unit(_rotate_about_axis(pitched_normal, pitched_roll_axis, roll_angle))
 
     assert abs(float(np.dot(rolled_normal, target_normal_parent))) == pytest.approx(
         1.0,
@@ -2099,22 +2147,14 @@ def test_triangle_control_graph_matches_between_abstract_and_realistic_models() 
         realistic_model.control_graph.control_node_names
     )
     assert [
-        (edge.from_node, edge.to_node, edge.type)
-        for edge in abstract_model.control_graph.edges
-    ] == [
-        (edge.from_node, edge.to_node, edge.type)
-        for edge in realistic_model.control_graph.edges
-    ]
+        (edge.from_node, edge.to_node, edge.type) for edge in abstract_model.control_graph.edges
+    ] == [(edge.from_node, edge.to_node, edge.type) for edge in realistic_model.control_graph.edges]
     assert abstract_model.control_graph.passive_control_node_names == (
         realistic_model.control_graph.passive_control_node_names
     )
     assert [
-        (edge.from_node, edge.to_node)
-        for edge in abstract_model.control_graph.actuator_edges
-    ] == [
-        (edge.from_node, edge.to_node)
-        for edge in realistic_model.control_graph.actuator_edges
-    ]
+        (edge.from_node, edge.to_node) for edge in abstract_model.control_graph.actuator_edges
+    ] == [(edge.from_node, edge.to_node) for edge in realistic_model.control_graph.actuator_edges]
 
     abstract_env = MujocoNodeVelocityCommandEnv(
         TrussEnvConfig(get_mujoco_spec("octahedron", realistic=False), max_steps=1)
@@ -2138,22 +2178,14 @@ def test_routed_control_graph_matches_between_abstract_and_realistic_models() ->
         realistic_model.control_graph.control_node_names
     )
     assert [
-        (edge.from_node, edge.to_node, edge.type)
-        for edge in abstract_model.control_graph.edges
-    ] == [
-        (edge.from_node, edge.to_node, edge.type)
-        for edge in realistic_model.control_graph.edges
-    ]
+        (edge.from_node, edge.to_node, edge.type) for edge in abstract_model.control_graph.edges
+    ] == [(edge.from_node, edge.to_node, edge.type) for edge in realistic_model.control_graph.edges]
     assert abstract_model.control_graph.passive_control_node_names == (
         realistic_model.control_graph.passive_control_node_names
     )
     assert [
-        (edge.from_node, edge.to_node)
-        for edge in abstract_model.control_graph.actuator_edges
-    ] == [
-        (edge.from_node, edge.to_node)
-        for edge in realistic_model.control_graph.actuator_edges
-    ]
+        (edge.from_node, edge.to_node) for edge in abstract_model.control_graph.actuator_edges
+    ] == [(edge.from_node, edge.to_node) for edge in realistic_model.control_graph.actuator_edges]
 
 
 def test_control_graph_maps_abstract_duplicates_to_shared_physical_nodes() -> None:
@@ -2627,9 +2659,7 @@ def _edge_tendon_neighbors(root: ET.Element) -> dict[str, tuple[str, ...]]:
         if not spatial.get("name", "").startswith("tendon_"):
             continue
         sites = [
-            site_ref.get("site")
-            for site_ref in spatial.findall("site")
-            if site_ref.get("site")
+            site_ref.get("site") for site_ref in spatial.findall("site") if site_ref.get("site")
         ]
         if len(sites) != 2:
             continue

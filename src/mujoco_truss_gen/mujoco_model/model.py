@@ -80,12 +80,10 @@ class MujocoModel:
             dtype=int,
         )
         self.internal_actuator_names = [
-            self.model.actuator(actuator_id).name
-            for actuator_id in self.internal_actuator_ids
+            self.model.actuator(actuator_id).name for actuator_id in self.internal_actuator_ids
         ]
         self.external_actuator_names = [
-            self.model.actuator(actuator_id).name
-            for actuator_id in self.external_actuator_ids
+            self.model.actuator(actuator_id).name for actuator_id in self.external_actuator_ids
         ]
         self.init_qpos = self.data.qpos.copy()
         self.init_qvel = self.data.qvel.copy()
@@ -98,6 +96,18 @@ class MujocoModel:
         self.init_act = self.data.act.copy()
         self.initial_bounding_box_dimensions = self._node_bounding_box_dimensions()
         self.initial_bounding_box_diagonal = self._node_bounding_box_diagonal()
+        self.initial_node_centroid = np.mean(
+            self.data.xpos[list(self.node_body_ids.values())], axis=0
+        )
+        self.pose_position_qpos_indices, self.pose_position_offsets = self._pose_position_metadata()
+        self.free_joint_qpos_adrs = np.asarray(
+            [
+                self.model.jnt_qposadr[j]
+                for j in range(self.model.njnt)
+                if self.model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE
+            ],
+            dtype=int,
+        )
         self.wcrm = False
         self.initial_critical_eig = max(self._critical_eig(), 1e-8)
 
@@ -263,11 +273,19 @@ class MujocoModel:
                 structural_edges.append((node_a, node_b))
         return structural_edges
 
-    def reset(self, rng: np.random.Generator | None = None) -> None:
+    def reset(
+        self,
+        rng: np.random.Generator | None = None,
+        *,
+        initial_translation_x: float = 0.0,
+        initial_translation_y: float = 0.0,
+        initial_yaw: float = 0.0,
+    ) -> None:
         rng = rng or np.random.default_rng()
         self.angle_bisector_controller.reset()
         self.data.qpos[:] = self.init_qpos + rng.uniform(-0.005, 0.005, size=self.model.nq)
         mujoco.mj_normalizeQuat(self.model, self.data.qpos)
+        self._apply_initial_pose(initial_translation_x, initial_translation_y, initial_yaw)
         self.data.qvel[:] = self.init_qvel + rng.uniform(-0.005, 0.005, size=self.model.nv)
         self.data.ctrl[:] = self.ctrl_home.copy()
         if self.model.na:
@@ -276,6 +294,69 @@ class MujocoModel:
         self.apply_angle_bisector_control()
         initialize_actuator_lengths(self.model, self.data)
         mujoco.mj_forward(self.model, self.data)
+
+    def _apply_initial_pose(self, translation_x: float, translation_y: float, yaw: float) -> None:
+        if not self.pose_position_qpos_indices.size:
+            return
+
+        cosine = np.cos(yaw)
+        sine = np.sin(yaw)
+        rotation = np.array([[cosine, -sine], [sine, cosine]])
+        pivot = self.initial_node_centroid[:2]
+        yaw_quaternion = np.array([np.cos(yaw / 2.0), 0.0, 0.0, np.sin(yaw / 2.0)])
+        for indices, offset in zip(
+            self.pose_position_qpos_indices, self.pose_position_offsets, strict=True
+        ):
+            position = offset + self.data.qpos[indices]
+            position[:2] = rotation @ (position[:2] - pivot) + pivot
+            position[0] += translation_x
+            position[1] += translation_y
+            self.data.qpos[indices] = position - offset
+
+        for qpos_adr in self.free_joint_qpos_adrs:
+            orientation = self.data.qpos[qpos_adr + 3 : qpos_adr + 7].copy()
+            mujoco.mju_mulQuat(
+                self.data.qpos[qpos_adr + 3 : qpos_adr + 7],
+                yaw_quaternion,
+                orientation,
+            )
+        mujoco.mj_normalizeQuat(self.model, self.data.qpos)
+
+    def _pose_position_metadata(self) -> tuple[np.ndarray, np.ndarray]:
+        indices: list[list[int]] = []
+        offsets: list[np.ndarray] = []
+        free_bodies: set[int] = set()
+
+        for joint_id in range(self.model.njnt):
+            if self.model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_FREE:
+                continue
+            body_id = int(self.model.jnt_bodyid[joint_id])
+            qpos_adr = int(self.model.jnt_qposadr[joint_id])
+            indices.append([qpos_adr, qpos_adr + 1, qpos_adr + 2])
+            offsets.append(np.zeros(3))
+            free_bodies.add(body_id)
+
+        for body_id in range(1, self.model.nbody):
+            if body_id in free_bodies:
+                continue
+            axis_to_qpos: dict[int, int] = {}
+            for joint_id in range(self.model.njnt):
+                if self.model.jnt_bodyid[joint_id] != body_id:
+                    continue
+                if self.model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_SLIDE:
+                    continue
+                axis = self.model.jnt_axis[joint_id]
+                component = int(np.argmax(np.abs(axis)))
+                expected = np.zeros(3)
+                expected[component] = 1.0
+                if np.allclose(axis, expected):
+                    axis_to_qpos[component] = int(self.model.jnt_qposadr[joint_id])
+            if set(axis_to_qpos) == {0, 1, 2}:
+                body_qpos_indices = [axis_to_qpos[axis] for axis in range(3)]
+                indices.append(body_qpos_indices)
+                offsets.append(self.data.xpos[body_id] - self.data.qpos[body_qpos_indices])
+
+        return np.asarray(indices, dtype=int), np.asarray(offsets, dtype=float)
 
     def apply_angle_bisector_control(self) -> None:
         self.angle_bisector_controller.update(self.model, self.data)
