@@ -3,6 +3,9 @@
 `mujoco-truss-gen` is a Python package for generating MuJoCo models and
 Gymnasium-style environments for triangle-based isoperimetric truss robots.
 
+Browse the [rendered preset catalog](https://isaa-sudweeks.github.io/mujoco-truss-gen/),
+ranked by initial worst-case rigidity index.
+
 The package is intended for members of the isoperimetric robot research workflow
 who need a shared, installable source of MuJoCo robot models instead of copying
 model-generation code between reinforcement learning, planning, simulation, and
@@ -104,6 +107,21 @@ python -m mujoco_truss_gen.generate_mujoco_model
 
 On macOS, MuJoCo's passive viewer may require running viewer scripts with
 `mjpython` instead of the standard `python` executable.
+
+Render a searchable catalog of every distinct registered preset, ranked by its
+initial worst-case rigidity index:
+
+```bash
+.venv/bin/mjpython tools/render_preset_catalog.py
+```
+
+The command writes the files deployed to the public
+[preset catalog](https://isaa-sudweeks.github.io/mujoco-truss-gen/):
+`preset_catalog/index.html`, full-resolution PNGs, and a JSON manifest. It checkpoints
+after every preset, so rerunning the command resumes an interrupted first-time build.
+Use `--realistic` for realistic connector geometry, `--overwrite` to rebuild existing
+entries, or `--include-aliases` to include the unsuffixed Henneberg names that alias
+variant `_1`.
 
 Routed continuous-tube presets such as `tetrahedron` are all-edge-actuated models
 whose route tendons softly constrain each tube to its initial total length. They
