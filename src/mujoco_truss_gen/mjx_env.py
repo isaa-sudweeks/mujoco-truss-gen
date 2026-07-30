@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import jax
 import jax.numpy as jnp
@@ -16,6 +16,11 @@ from mujoco_truss_gen.mujoco_model.controllers import NodeVelocityController
 from mujoco_truss_gen.mujoco_model.model import ModelSource, MujocoModel
 
 MjxInfo = dict[str, jax.Array]
+MjxImplementation = Literal["jax", "warp"]
+WarpGraphMode = Literal["warp", "warp_staged", "warp_staged_ex"]
+
+_MJX_IMPLEMENTATIONS = frozenset(("jax", "warp"))
+_WARP_GRAPH_MODES = frozenset(("warp", "warp_staged", "warp_staged_ex"))
 
 
 @jax.tree_util.register_dataclass
@@ -67,14 +72,26 @@ class MjxNodeVelocityEnv:
     def __init__(
         self,
         model_source: TrussEnvConfig | ModelSource,
+        *,
+        mjx_impl: MjxImplementation = "jax",
+        warp_graph_mode: WarpGraphMode = "warp",
+        warp_naconmax: int | None = None,
+        warp_njmax: int | None = None,
         **config_overrides: Any,
     ) -> None:
+        self.mjx_impl = str(mjx_impl).lower()
+        self.warp_graph_mode = str(warp_graph_mode).lower()
+        self.warp_naconmax = self._validate_optional_capacity(warp_naconmax, "warp_naconmax")
+        self.warp_njmax = self._validate_optional_capacity(warp_njmax, "warp_njmax")
+        self._validate_implementation_config()
+
         self.config = _coerce_config(model_source, config_overrides)
         self._validate_config()
         self._domain_randomization = self.config.domain_randomization
 
         self.mujoco_model = MujocoModel(self.config.model_source)
         model = self.mujoco_model.model
+        mujoco.mj_forward(model, self.mujoco_model.data)
         if (
             self._domain_randomization is not None
             and self._domain_randomization.dof_damping_multiplier_range is not None
@@ -116,19 +133,9 @@ class MjxNodeVelocityEnv:
                 "node-routed tendon actuators."
             )
 
-        try:
-            self.mjx_model = mjx.put_model(model)
-            self._data_template = mjx.put_data(model, self.mujoco_model.data)
-        except (NotImplementedError, ValueError) as error:
-            raise ValueError(f"Model is not compatible with MJX: {error}") from error
+        self.mjx_model, self._data_template = self._make_mjx_model_and_data()
         self._enable_randomized_frictionloss_constraints()
-        const_data_template = mjx.forward(self.mjx_model, self._data_template)
-        self._tendon_jacobian0 = const_data_template._impl.ten_J
-        self._actuator_moment0 = const_data_template._impl.actuator_moment
-        # MJX stores qM densely for small models and in MuJoCo's packed sparse
-        # representation for larger models.  The domain-randomization helpers
-        # below operate on the full matrix in either case.
-        self._qM0 = mjx.full_m(self.mjx_model, const_data_template)
+        self._capture_nominal_dynamics()
         self._nominal_qm_physical = self._nominal_physical_mass_matrix()
         self._actuator_acc0_scale = self._nominal_actuator_acc0_scale()
 
@@ -317,8 +324,112 @@ class MjxNodeVelocityEnv:
             model.actuator_trnid[reset_actuator_ids, 0], dtype=jnp.int32
         )
 
+    def _make_mjx_model_and_data(self) -> tuple[mjx.Model, mjx.Data]:
+        model = self.mujoco_model.model
+        data = self.mujoco_model.data
+        graph_mode = None
+        device = None
+
+        if self.mjx_impl == "warp":
+            device, graph_mode = self._resolve_warp_runtime()
+
+        try:
+            mjx_model = mjx.put_model(
+                model,
+                device=device,
+                impl=self.mjx_impl,
+                graph_mode=graph_mode,
+            )
+            data_kwargs: dict[str, Any] = {
+                "device": device,
+                "impl": self.mjx_impl,
+            }
+            if self.mjx_impl == "warp":
+                data_kwargs["naconmax"] = self.warp_naconmax
+                data_kwargs["njmax"] = self.warp_njmax
+            data_template = mjx.put_data(model, data, **data_kwargs)
+        except (ImportError, NotImplementedError, RuntimeError, ValueError) as error:
+            raise ValueError(
+                f"Model is not compatible with MJX implementation {self.mjx_impl!r}: {error}"
+            ) from error
+        return mjx_model, data_template
+
+    def _resolve_warp_runtime(self) -> tuple[jax.Device, Any]:
+        device = jax.devices()[0]
+        if device.platform not in {"cuda", "gpu"}:
+            raise RuntimeError(
+                "mjx_impl='warp' requires the active JAX default device to be an NVIDIA "
+                f"CUDA GPU; got platform={device.platform!r}. Install the CUDA-enabled JAX "
+                "build and select the GPU before constructing MjxNodeVelocityEnv."
+            )
+
+        try:
+            import warp  # noqa: F401
+            from mujoco.mjx.warp import types as warp_types  # type: ignore[import-untyped]
+        except (ImportError, RuntimeError) as error:
+            raise ImportError(
+                "mjx_impl='warp' requires the optional Warp dependencies. "
+                "Install mujoco-truss-gen[warp]."
+            ) from error
+
+        graph_mode_name = self.warp_graph_mode.upper()
+        try:
+            graph_mode = getattr(warp_types.GraphMode, graph_mode_name)
+        except AttributeError as error:
+            raise RuntimeError(
+                f"Installed Warp does not provide graph mode {graph_mode_name}; "
+                "install the Warp version selected by mujoco-mjx."
+            ) from error
+        return device, graph_mode
+
+    def _capture_nominal_dynamics(self) -> None:
+        """Capture backend-neutral dense dynamics arrays from native MuJoCo."""
+
+        model = self.mujoco_model.model
+        data = self.mujoco_model.data
+        tendon_jacobian = self._dense_sparse_rows(
+            data.ten_J,
+            model.ten_J_rowadr,
+            model.ten_J_rownnz,
+            model.ten_J_colind,
+            model.ntendon,
+            model.nv,
+        )
+        actuator_moment = self._dense_sparse_rows(
+            data.actuator_moment,
+            data.moment_rowadr,
+            data.moment_rownnz,
+            data.moment_colind,
+            model.nu,
+            model.nv,
+        )
+        full_mass = np.empty((model.nv, model.nv), dtype=data.qM.dtype)
+        mujoco.mj_fullM(model, full_mass, data.qM)
+
+        dtype = self._data_template.qpos.dtype
+        self._tendon_jacobian0 = jnp.asarray(tendon_jacobian, dtype=dtype)
+        self._actuator_moment0 = jnp.asarray(actuator_moment, dtype=dtype)
+        self._qM0 = jnp.asarray(full_mass, dtype=dtype)
+
+    @staticmethod
+    def _dense_sparse_rows(
+        values: np.ndarray,
+        row_addresses: np.ndarray,
+        row_nonzeros: np.ndarray,
+        column_indices: np.ndarray,
+        row_count: int,
+        column_count: int,
+    ) -> np.ndarray:
+        dense = np.zeros((row_count, column_count), dtype=values.dtype)
+        for row in range(row_count):
+            address = int(row_addresses[row])
+            nonzeros = int(row_nonzeros[row])
+            columns = column_indices[address : address + nonzeros]
+            dense[row, columns] = values[address : address + nonzeros]
+        return dense
+
     def _enable_randomized_frictionloss_constraints(self) -> None:
-        if self._domain_randomization is None:
+        if self._domain_randomization is None or self.mjx_impl != "jax":
             return
 
         impl = self.mjx_model._impl
@@ -390,6 +501,33 @@ class MjxNodeVelocityEnv:
         if not np.isfinite(self.config.speed) or float(self.config.speed) < 0.0:
             raise ValueError("speed must be finite and non-negative.")
 
+    def _validate_implementation_config(self) -> None:
+        if self.mjx_impl not in _MJX_IMPLEMENTATIONS:
+            choices = ", ".join(sorted(_MJX_IMPLEMENTATIONS))
+            raise ValueError(f"mjx_impl must be one of {choices}; got {self.mjx_impl!r}.")
+        if self.warp_graph_mode not in _WARP_GRAPH_MODES:
+            choices = ", ".join(sorted(_WARP_GRAPH_MODES))
+            raise ValueError(
+                f"warp_graph_mode must be one of {choices}; got {self.warp_graph_mode!r}."
+            )
+        if self.mjx_impl == "jax" and (
+            self.warp_graph_mode != "warp"
+            or self.warp_naconmax is not None
+            or self.warp_njmax is not None
+        ):
+            raise ValueError(
+                "warp_graph_mode, warp_naconmax, and warp_njmax may only be customized "
+                "when mjx_impl='warp'."
+            )
+
+    @staticmethod
+    def _validate_optional_capacity(value: int | None, name: str) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or int(value) <= 0:
+            raise ValueError(f"{name} must be a positive integer or None.")
+        return int(value)
+
     def reset(self, keys: jax.Array) -> tuple[jax.Array, MjxEnvState]:
         """Reset a batch from one explicit random key per environment."""
 
@@ -435,13 +573,112 @@ class MjxNodeVelocityEnv:
 
         _, reset_state = self.reset(keys)
         mask = jnp.asarray(mask, dtype=jnp.bool_)
-
-        def select(reset_value: jax.Array, old_value: jax.Array) -> jax.Array:
-            expanded_mask = mask.reshape((batch_size,) + (1,) * (reset_value.ndim - 1))
-            return jnp.where(expanded_mask, reset_value, old_value)
-
-        merged_state = jax.tree.map(select, reset_state, state)
+        merged_state = MjxEnvState(
+            data=self._data_where(mask, state.data, reset_state.data),
+            step_count=self._batch_where(mask, state.step_count, reset_state.step_count),
+            node_commands=self._batch_where(mask, state.node_commands, reset_state.node_commands),
+            domain_randomization=jax.tree.map(
+                lambda old, reset: self._batch_where(mask, old, reset),
+                state.domain_randomization,
+                reset_state.domain_randomization,
+            ),
+        )
         return self._get_obs(merged_state), merged_state
+
+    def _data_where(self, mask: jax.Array, old_data: mjx.Data, reset_data: mjx.Data) -> mjx.Data:
+        """Merge batched MJX data without selecting Warp's shared contact buffers."""
+
+        where_method = getattr(old_data, "where", None)
+        if callable(where_method):
+            return where_method(mask, reset_data)
+        if self.mjx_impl == "jax":
+            return jax.tree.map(
+                lambda old, reset: self._batch_where(mask, old, reset),
+                old_data,
+                reset_data,
+            )
+
+        from mujoco.mjx.warp import types as warp_types  # type: ignore[import-untyped]
+
+        def merge_leaf(
+            path: jax.tree_util.KeyPath,
+            old_value: jax.Array,
+            reset_value: jax.Array,
+        ) -> jax.Array:
+            field_name = self._tree_path_to_warp_field(path)
+            is_batched = warp_types._BATCH_DIM["Data"].get(field_name, True)
+            if not is_batched:
+                return old_value
+            return self._batch_where(mask, old_value, reset_value)
+
+        return jax.tree_util.tree_map_with_path(merge_leaf, old_data, reset_data)
+
+    @staticmethod
+    def _tree_path_to_warp_field(path: jax.tree_util.KeyPath) -> str:
+        sequence_indices = [
+            index
+            for index, entry in enumerate(path)
+            if isinstance(entry, jax.tree_util.SequenceKey)
+        ]
+        if sequence_indices:
+            path = path[: sequence_indices[0]]
+        attributes = [
+            entry.name
+            for entry in path
+            if isinstance(entry, jax.tree_util.GetAttrKey) and entry.name != "_impl"
+        ]
+        return "__".join(attributes)
+
+    @staticmethod
+    def _batch_where(
+        mask: jax.Array,
+        old_value: jax.Array,
+        reset_value: jax.Array,
+    ) -> jax.Array:
+        expanded_mask = mask.reshape((mask.shape[0],) + (1,) * (reset_value.ndim - 1))
+        return jnp.where(expanded_mask, reset_value, old_value)
+
+    def buffer_diagnostics(self, state: MjxEnvState) -> dict[str, int | bool | str | None]:
+        """Return synchronized contact/constraint capacity diagnostics.
+
+        This method is intentionally host-side and should only be called by
+        diagnostics or benchmarks, never from the compiled training hot path.
+        """
+
+        diagnostics: dict[str, int | bool | str | None] = {
+            "implementation": self.mjx_impl,
+            "contact_count": None,
+            "contact_capacity": None,
+            "constraint_count_max": None,
+            "constraint_capacity": None,
+            "contact_capacity_reached": False,
+            "constraint_capacity_reached": False,
+            "overflow": False,
+        }
+        if self.mjx_impl != "warp":
+            return diagnostics
+
+        impl = state.data._impl
+        contact_counts = np.asarray(jax.device_get(impl.nacon))
+        constraint_counts = np.asarray(jax.device_get(impl.nefc))
+        contact_count = int(np.sum(contact_counts))
+        constraint_count = int(np.max(constraint_counts, initial=0))
+        contact_capacity = int(impl.naconmax)
+        constraint_capacity = int(impl.njmax)
+        contact_reached = contact_count >= contact_capacity
+        constraint_reached = constraint_count >= constraint_capacity
+        diagnostics.update(
+            {
+                "contact_count": contact_count,
+                "contact_capacity": contact_capacity,
+                "constraint_count_max": constraint_count,
+                "constraint_capacity": constraint_capacity,
+                "contact_capacity_reached": contact_reached,
+                "constraint_capacity_reached": constraint_reached,
+                "overflow": contact_reached or constraint_reached,
+            }
+        )
+        return diagnostics
 
     def _reset_one(
         self,
@@ -746,7 +983,8 @@ class MjxNodeVelocityEnv:
             + jnp.diag(dof_armature)
             + jnp.diag(tendon_armature_diag)
         )
-        return jnp.linalg.inv(qm)
+        inverse: jax.Array = jnp.linalg.inv(qm)
+        return inverse
 
     def _tendon_invweight0_for_domain(
         self,

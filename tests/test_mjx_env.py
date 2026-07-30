@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -29,6 +30,9 @@ def _is_indexed_henneberg_variant(preset_name: str) -> bool:
 
 
 CANONICAL_PRESET_NAMES = tuple(name for name in PRESETS if not _is_indexed_henneberg_variant(name))
+CUDA_WARP_AVAILABLE = (
+    jax.devices()[0].platform in {"cuda", "gpu"} and importlib.util.find_spec("warp") is not None
+)
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,59 @@ def test_mjx_node_velocity_env_constructs_with_sparse_mass_matrix() -> None:
 
     assert env._qM0.shape == (env.mjx_model.nv, env.mjx_model.nv)
     assert env._nominal_qm_physical.shape == (env.mjx_model.nv, env.mjx_model.nv)
+
+
+def test_mjx_implementation_defaults_to_jax_and_reports_no_warp_buffers() -> None:
+    env = MjxNodeVelocityEnv(get_mujoco_spec("tetrahedron", realistic=False))
+    _, state = jax.jit(env.reset)(_keys(0, batch_size=1))
+
+    assert env.mjx_impl == "jax"
+    assert env.warp_graph_mode == "warp"
+    assert env.warp_naconmax is None
+    assert env.warp_njmax is None
+    assert env.buffer_diagnostics(state) == {
+        "implementation": "jax",
+        "contact_count": None,
+        "contact_capacity": None,
+        "constraint_count_max": None,
+        "constraint_capacity": None,
+        "contact_capacity_reached": False,
+        "constraint_capacity_reached": False,
+        "overflow": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    (
+        ({"mjx_impl": "other"}, "mjx_impl must be one of"),
+        ({"warp_graph_mode": "other"}, "warp_graph_mode must be one of"),
+        ({"warp_naconmax": 0}, "warp_naconmax must be a positive integer"),
+        ({"warp_naconmax": 1.0}, "warp_naconmax must be a positive integer"),
+        ({"warp_njmax": True}, "warp_njmax must be a positive integer"),
+        (
+            {"mjx_impl": "jax", "warp_naconmax": 16},
+            "may only be customized when mjx_impl='warp'",
+        ),
+    ),
+)
+def test_mjx_implementation_options_are_validated(
+    kwargs: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        MjxNodeVelocityEnv(get_mujoco_spec("tetrahedron", realistic=False), **kwargs)
+
+
+def test_warp_backend_fails_clearly_without_active_cuda_device() -> None:
+    if jax.devices()[0].platform in {"cuda", "gpu"}:
+        pytest.skip("This error-path test applies only when CUDA is not active.")
+
+    with pytest.raises(RuntimeError, match="requires the active JAX default device"):
+        MjxNodeVelocityEnv(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            mjx_impl="warp",
+        )
 
 
 def test_mjx_reset_is_batched_deterministic_and_initializes_actuators(
@@ -403,6 +460,153 @@ def test_mjx_reset_where_only_resets_masked_elements(
     assert not np.array_equal(
         np.asarray(merged_state.data.qpos[0]), np.asarray(stepped_state.data.qpos[0])
     )
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not CUDA_WARP_AVAILABLE, reason="CUDA Warp dependencies are unavailable")
+@pytest.mark.parametrize("graph_mode", ("warp", "warp_staged", "warp_staged_ex"))
+def test_warp_graph_modes_step_and_selectively_reset(graph_mode: str) -> None:
+    batch_size = 2
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            max_steps=4,
+            nsubsteps=2,
+        ),
+        mjx_impl="warp",
+        warp_graph_mode=graph_mode,
+        warp_naconmax=128 * batch_size,
+        warp_njmax=256,
+    )
+    reset = jax.jit(env.reset)
+    step = jax.jit(env.step)
+    reset_where = jax.jit(env.reset_where)
+
+    obs, state = reset(_keys(100, batch_size=batch_size))
+    actions = jnp.linspace(-0.01, 0.01, env.action_size)[None, :].repeat(batch_size, axis=0)
+    next_obs, stepped_state, reward, done, info = step(
+        _keys(101, batch_size=batch_size), state, actions
+    )
+    reset_obs, merged_state = reset_where(
+        _keys(102, batch_size=batch_size),
+        stepped_state,
+        jnp.array([True, False]),
+    )
+
+    assert (
+        obs.shape
+        == next_obs.shape
+        == reset_obs.shape
+        == (
+            batch_size,
+            env.observation_size,
+        )
+    )
+    expected_commands = jnp.where(env._passive_node_mask[None, :], 0.0, actions)
+    np.testing.assert_allclose(stepped_state.node_commands, expected_commands, rtol=1e-6, atol=1e-7)
+    np.testing.assert_array_equal(merged_state.step_count, np.array([0, 1]))
+    np.testing.assert_array_equal(merged_state.data.qpos[1], stepped_state.data.qpos[1])
+    assert bool(jnp.all(jnp.isfinite(next_obs)))
+    assert bool(jnp.all(jnp.isfinite(reward)))
+    assert done.shape == (batch_size,)
+    assert info["terminated"].shape == (batch_size,)
+    diagnostics = env.buffer_diagnostics(stepped_state)
+    assert diagnostics["contact_capacity"] == 128 * batch_size
+    assert diagnostics["constraint_capacity"] == 256
+    assert diagnostics["overflow"] is False
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not CUDA_WARP_AVAILABLE, reason="CUDA Warp dependencies are unavailable")
+def test_warp_and_jax_one_step_behavior_match() -> None:
+    config = TrussEnvConfig(
+        get_mujoco_spec("tetrahedron", realistic=False),
+        max_steps=2,
+        nsubsteps=1,
+        speed=0.01,
+    )
+    jax_env = MjxNodeVelocityEnv(config, mjx_impl="jax")
+    warp_env = MjxNodeVelocityEnv(
+        config,
+        mjx_impl="warp",
+        warp_naconmax=256,
+        warp_njmax=256,
+    )
+    keys = _keys(110, batch_size=1)
+    jax_obs, jax_state = jax.jit(jax_env.reset)(keys)
+    warp_obs, warp_state = jax.jit(warp_env.reset)(keys)
+    action = jnp.linspace(-0.01, 0.01, jax_env.action_size)[None, :]
+
+    jax_result = jax.jit(jax_env.step)(keys, jax_state, action)
+    warp_result = jax.jit(warp_env.step)(keys, warp_state, action)
+
+    np.testing.assert_allclose(warp_obs, jax_obs, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(warp_result[0], jax_result[0], rtol=2e-2, atol=2e-4)
+    np.testing.assert_allclose(warp_result[2], jax_result[2], rtol=2e-2, atol=2e-4)
+    np.testing.assert_array_equal(warp_result[3], jax_result[3])
+    np.testing.assert_array_equal(
+        warp_result[4]["terminated"],
+        jax_result[4]["terminated"],
+    )
+    np.testing.assert_array_equal(
+        warp_result[4]["truncated"],
+        jax_result[4]["truncated"],
+    )
+    np.testing.assert_allclose(
+        warp_result[1].node_commands,
+        jax_result[1].node_commands,
+        rtol=1e-6,
+        atol=1e-7,
+    )
+    np.testing.assert_allclose(
+        warp_result[1].data.ctrl,
+        jax_result[1].data.ctrl,
+        rtol=1e-4,
+        atol=1e-5,
+    )
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not CUDA_WARP_AVAILABLE, reason="CUDA Warp dependencies are unavailable")
+def test_warp_domain_randomization_is_independent_and_finite() -> None:
+    batch_size = 4
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            domain_randomization=DomainRandomizationConfig(
+                body_mass_multiplier_range=(0.8, 1.2),
+                body_inertia_multiplier_range=(0.8, 1.2),
+                actuator_gain_multiplier_range=(0.75, 1.25),
+                actuator_bias_multiplier_range=(0.75, 1.25),
+                geom_friction_slide_range=(0.4, 1.2),
+                gravity_z_range=(-10.5, -8.8),
+            ),
+        ),
+        mjx_impl="warp",
+        warp_naconmax=128 * batch_size,
+        warp_njmax=256,
+    )
+    reset = jax.jit(env.reset)
+    step = jax.jit(env.step)
+    obs, state = reset(_keys(120, batch_size=batch_size))
+
+    masses = np.asarray(state.domain_randomization.body_mass_multiplier)
+    assert np.unique(masses).size > 1
+    assert np.all((masses >= 0.8) & (masses <= 1.2))
+    assert np.all(
+        (np.asarray(state.domain_randomization.gravity_z) >= -10.5)
+        & (np.asarray(state.domain_randomization.gravity_z) <= -8.8)
+    )
+    actions = jnp.zeros((batch_size, env.action_size), dtype=jnp.float32)
+    for step_index in range(10):
+        obs, state, reward, _, _ = step(
+            _keys(121 + step_index, batch_size=batch_size),
+            state,
+            actions,
+        )
+    assert bool(jnp.all(jnp.isfinite(obs)))
+    assert bool(jnp.all(jnp.isfinite(reward)))
+    assert env.buffer_diagnostics(state)["overflow"] is False
 
 
 def test_mjx_domain_randomization_reset_is_deterministic_and_batched() -> None:
