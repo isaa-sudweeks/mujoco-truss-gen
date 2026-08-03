@@ -10,8 +10,7 @@ sbatch slurm/profile_mjx_warp.sbatch
 The job requests one GPU, five CPU cores, 32 GB RAM, and the ORC `standby` QoS.
 It performs these stages in order:
 
-1. Synchronize the development/Warp environment and install a matched CUDA 13
-   JAX 0.10.1 stack.
+1. Record the development/Warp environment prepared on the login node.
 2. Verify GPU discovery and a cuSolver operation.
 3. Run the CUDA-marked MJX behavior tests.
 4. Run the realistic-octahedron diagnostic at batches 8 and 128.
@@ -27,11 +26,15 @@ last completed decision point.
 The script is requeue-safe: completed stages have markers under the result
 directory and are skipped when the same Slurm job restarts after preemption.
 
-To reuse an environment that is already known-good, skip package setup:
+ORC compute nodes cannot reach PyPI, so package installation is disabled by
+default. Prepare or repair the environment on the login node before submission:
 
 ```bash
-MJX_PROFILE_SKIP_ENV_SETUP=1 sbatch slurm/profile_mjx_warp.sbatch
+uv sync --frozen --extra dev --extra warp
+uv pip install --python .venv/bin/python --reinstall "jax[cuda13]==0.10.1"
+sbatch slurm/profile_mjx_warp.sbatch
 ```
 
-Optional overrides include `MJX_PROFILE_JAX_VERSION`,
+`MJX_PROFILE_SETUP_ENV=1` is available only for clusters whose compute nodes
+have package-index access. Optional overrides include `MJX_PROFILE_JAX_VERSION`,
 `MJX_PROFILE_JAX_CUDA_EXTRA`, and `MJX_PROFILE_RESULT_ROOT`.

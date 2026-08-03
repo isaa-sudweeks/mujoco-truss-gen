@@ -117,12 +117,16 @@ if ! profile_stage_done metadata; then
 fi
 
 if ! profile_stage_done environment; then
-    if [[ "${MJX_PROFILE_SKIP_ENV_SETUP:-0}" != "1" ]]; then
+    if [[ "${MJX_PROFILE_SETUP_ENV:-0}" == "1" ]]; then
         "${PROFILE_UV}" sync --frozen --extra dev --extra warp
         "${PROFILE_UV}" pip install \
             --python .venv/bin/python \
             --reinstall \
             "jax[${PROFILE_JAX_CUDA_EXTRA}]==${PROFILE_JAX_VERSION}"
+    fi
+    if [[ ! -x .venv/bin/python ]]; then
+        echo ".venv is missing. Prepare it on the login node before submitting." >&2
+        exit 2
     fi
     "${PROFILE_UV}" pip list --python .venv/bin/python \
         > "${PROFILE_RESULT_ROOT}/python_packages.txt"
