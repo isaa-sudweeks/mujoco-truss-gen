@@ -21,6 +21,7 @@ from mujoco_truss_gen import (
     TrussEnvConfig,
     get_mujoco_spec,
 )
+from mujoco_truss_gen.mjx_env import _configure_integrator_for_backend
 
 
 def _is_indexed_henneberg_variant(preset_name: str) -> bool:
@@ -103,8 +104,30 @@ def test_mjx_node_velocity_env_constructs_for_canonical_abstract_presets(
 def test_mjx_node_velocity_env_constructs_with_sparse_mass_matrix() -> None:
     env = MjxNodeVelocityEnv(get_mujoco_spec("octahedron", realistic=True))
 
+    assert env.mujoco_model.model.opt.integrator == mujoco.mjtIntegrator.mjINT_IMPLICITFAST
     assert env._qM0.shape == (env.mjx_model.nv, env.mjx_model.nv)
     assert env._nominal_qm_physical.shape == (env.mjx_model.nv, env.mjx_model.nv)
+
+
+@pytest.mark.parametrize(
+    ("implementation", "requested", "expected"),
+    (
+        ("jax", mujoco.mjtIntegrator.mjINT_IMPLICITFAST, mujoco.mjtIntegrator.mjINT_IMPLICITFAST),
+        ("warp", mujoco.mjtIntegrator.mjINT_IMPLICITFAST, mujoco.mjtIntegrator.mjINT_EULER),
+        ("warp", mujoco.mjtIntegrator.mjINT_RK4, mujoco.mjtIntegrator.mjINT_RK4),
+    ),
+)
+def test_mjx_backend_integrator_compatibility(
+    implementation: str,
+    requested: mujoco.mjtIntegrator,
+    expected: mujoco.mjtIntegrator,
+) -> None:
+    model = get_mujoco_spec("tetrahedron", realistic=False).compile()
+    model.opt.integrator = requested
+
+    _configure_integrator_for_backend(model, implementation)
+
+    assert model.opt.integrator == expected
 
 
 def test_mjx_implementation_defaults_to_jax_and_reports_no_warp_buffers() -> None:
@@ -478,6 +501,8 @@ def test_warp_graph_modes_step_and_selectively_reset(graph_mode: str) -> None:
         warp_naconmax=128 * batch_size,
         warp_njmax=256,
     )
+    assert env.mujoco_model.model.opt.integrator == mujoco.mjtIntegrator.mjINT_EULER
+    assert int(env.mjx_model.opt.integrator) == int(mujoco.mjtIntegrator.mjINT_EULER)
     reset = jax.jit(env.reset)
     step = jax.jit(env.step)
     reset_where = jax.jit(env.reset_where)
