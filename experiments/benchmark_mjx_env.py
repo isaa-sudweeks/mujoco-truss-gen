@@ -560,6 +560,54 @@ def _aggregate_workloads(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return workloads
 
 
+def _required_model_finiteness(
+    results: list[dict[str, Any]],
+    *,
+    required_models: tuple[str, ...],
+    batch_sizes: tuple[int, ...],
+    implementations: tuple[str, ...],
+    graph_modes: tuple[str, ...],
+) -> dict[str, Any]:
+    """Summarize the benchmark-local required-model behavioral gate.
+
+    A missing or errored required case is not silently treated as passing. JAX
+    has one graph-independent case per model/batch; Warp must be finite for
+    every requested graph mode.
+    """
+
+    successful = {_case_key(result): result for result in results if result.get("status") == "ok"}
+    cases: list[dict[str, Any]] = []
+    for model in required_models:
+        for batch_size in batch_sizes:
+            for implementation in implementations:
+                modes = ("warp",) if implementation == "jax" else graph_modes
+                for graph_mode in modes:
+                    key = (model, batch_size, implementation, graph_mode)
+                    result = successful.get(key)
+                    finite = bool(result and result.get("validation", {}).get("finite"))
+                    cases.append(
+                        {
+                            "model": model,
+                            "batch_size": batch_size,
+                            "implementation": implementation,
+                            "graph_mode": graph_mode,
+                            "present": result is not None,
+                            "finite": finite,
+                            "done_count": (
+                                result.get("validation", {}).get("done_count")
+                                if result is not None
+                                else None
+                            ),
+                            "passed": result is not None and finite,
+                        }
+                    )
+    return {
+        "passed": bool(cases) and all(case["passed"] for case in cases),
+        "cases": cases,
+        "failures": [case for case in cases if not case["passed"]],
+    }
+
+
 def _format_float(value: float | None, digits: int = 3) -> str:
     if value is None or not math.isfinite(value):
         return "n/a"
@@ -578,6 +626,8 @@ def render_report(payload: dict[str, Any]) -> str:
     ]
     workloads = payload["analysis"]["representative_workloads"]
     capacity_passed = payload["analysis"]["capacity_gate_passed"]
+    finiteness = payload["analysis"]["required_model_finiteness"]
+    finiteness_passed = bool(finiteness["passed"])
     if not workloads:
         lines.append(
             "**Pending.** The complete 512-environment JAX/Warp representative workload "
@@ -586,8 +636,12 @@ def render_report(payload: dict[str, Any]) -> str:
     else:
         best = max(workloads, key=lambda item: item["physics_speedup"])
         performance_passed = bool(best["performance_gate_passed"])
-        adoption_ready = performance_passed and capacity_passed
-        status = "Performance and capacity gates passed" if adoption_ready else "Do not adopt"
+        adoption_ready = performance_passed and capacity_passed and finiteness_passed
+        status = (
+            "Benchmark-local gates passed; CUDA parity suite still required"
+            if adoption_ready
+            else "Do not adopt"
+        )
         lines.extend(
             [
                 f"**{status}.** Best measured graph mode: `{best['graph_mode']}`.",
@@ -597,10 +651,30 @@ def render_report(payload: dict[str, Any]) -> str:
                 f"{_format_float(best['estimated_total_training_speedup'])}×",
                 f"- 1.5× performance gate: {'pass' if performance_passed else 'fail'}",
                 f"- Capacity gate: {'pass' if capacity_passed else 'fail'}",
+                f"- Required-model finiteness gate: {'pass' if finiteness_passed else 'fail'}",
                 "- Behavioral parity gate: must also pass the CUDA-marked pytest suite "
                 "before public adoption.",
             ]
         )
+
+    if finiteness["failures"]:
+        lines.extend(
+            [
+                "",
+                "### Required-model behavioral failures",
+                "",
+                "| Model | Batch | Implementation | Graph mode | Present | Finite | Done |",
+                "|---|---:|---|---|---|---|---:|",
+            ]
+        )
+        for failure in finiteness["failures"]:
+            lines.append(
+                f"| `{failure['model']}` | {failure['batch_size']} | "
+                f"`{failure['implementation']}` | `{failure['graph_mode']}` | "
+                f"{'yes' if failure['present'] else 'no'} | "
+                f"{'yes' if failure['finite'] else 'no'} | "
+                f"{failure['done_count'] if failure['done_count'] is not None else 'n/a'} |"
+            )
 
     lines.extend(
         [
@@ -677,6 +751,20 @@ def render_report(payload: dict[str, Any]) -> str:
             "Raw package versions, model dimensions, solver settings, graph-capture "
             "timings, reset timings, memory readings, outliers, and capacity high-water "
             "marks are retained in the companion JSON file.",
+            "",
+            "## Focused realistic-model diagnostic",
+            "",
+            "If any realistic-model case is non-finite or capacity-dependent, run the "
+            "seeded diagnostic before repeating the full matrix:",
+            "",
+            "```bash",
+            "python -m experiments.diagnose_mjx_warp_realistic --batch-size 8 --steps 100",
+            "```",
+            "",
+            "It runs equivalent saved initial states and actions through native MuJoCo, "
+            "MJX-JAX, and every Warp graph mode at base and doubled capacities. The JSON "
+            "summary identifies the first non-finite or divergent field and environment; "
+            "the companion NPZ retains full per-step traces.",
             "",
         ]
     )
@@ -831,31 +919,42 @@ def main() -> None:
     validation_results = []
     if "warp" in args.implementations and 512 in args.batch_sizes:
         for model in args.models:
-            for capacity_scale in (1, 2):
-                validation_case = BenchmarkCase(
-                    model=model,
-                    batch_size=512,
-                    implementation="warp",
-                    graph_mode="warp",
-                    nsubsteps=args.nsubsteps,
-                    seed=args.seed,
-                    warmup_steps=0,
-                    block_count=0,
-                    steps_per_block=0,
-                    latency_samples=10,
-                    reset_samples=0,
-                    warp_contact_capacity_per_env=args.warp_contact_capacity_per_env,
-                    warp_constraint_capacity=args.warp_constraint_capacity,
-                    capacity_scale=capacity_scale,
-                    capacity_validation_only=True,
-                )
-                print(f"[capacity x{capacity_scale}] {model} batch=512", flush=True)
-                validation_results.append(_run_subprocess_case(script, validation_case))
+            for graph_mode in args.warp_graph_modes:
+                for capacity_scale in (1, 2):
+                    validation_case = BenchmarkCase(
+                        model=model,
+                        batch_size=512,
+                        implementation="warp",
+                        graph_mode=graph_mode,
+                        nsubsteps=args.nsubsteps,
+                        seed=args.seed,
+                        warmup_steps=0,
+                        block_count=0,
+                        steps_per_block=0,
+                        latency_samples=10,
+                        reset_samples=0,
+                        warp_contact_capacity_per_env=args.warp_contact_capacity_per_env,
+                        warp_constraint_capacity=args.warp_constraint_capacity,
+                        capacity_scale=capacity_scale,
+                        capacity_validation_only=True,
+                    )
+                    print(
+                        f"[capacity x{capacity_scale}] {model} batch=512 graph={graph_mode}",
+                        flush=True,
+                    )
+                    validation_results.append(_run_subprocess_case(script, validation_case))
 
     capacity_comparisons = _capacity_comparisons(validation_results)
     aggregate_workloads = _aggregate_workloads(results)
     capacity_gate_passed = bool(capacity_comparisons) and all(
         comparison["passed"] for comparison in capacity_comparisons
+    )
+    required_model_finiteness = _required_model_finiteness(
+        results,
+        required_models=tuple(args.models),
+        batch_sizes=tuple(args.batch_sizes),
+        implementations=tuple(args.implementations),
+        graph_modes=tuple(args.warp_graph_modes),
     )
     payload = {
         "schema_version": 1,
@@ -888,6 +987,7 @@ def main() -> None:
         "analysis": {
             "capacity_comparisons": capacity_comparisons,
             "capacity_gate_passed": capacity_gate_passed,
+            "required_model_finiteness": required_model_finiteness,
             "representative_workloads": aggregate_workloads,
         },
     }

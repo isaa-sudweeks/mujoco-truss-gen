@@ -5,6 +5,7 @@ from experiments.benchmark_mjx_env import (
     REPRESENTATIVE_MODELS,
     _aggregate_workloads,
     _capacity_comparisons,
+    _required_model_finiteness,
 )
 
 
@@ -86,3 +87,26 @@ def test_capacity_gate_requires_matching_finite_base_and_doubled_runs() -> None:
 
     doubled["validation"]["reward_checksum"] = 3.0
     assert _capacity_comparisons([base, doubled])[0]["passed"] is False
+
+
+def test_required_model_finiteness_fails_nonfinite_or_missing_cases() -> None:
+    jax_result = _result("octahedron:realistic", "jax", "warp", vector_step_seconds=1.0)
+    warp_result = _result("octahedron:realistic", "warp", "warp_staged", vector_step_seconds=1.0)
+    warp_result["validation"]["finite"] = False
+    warp_result["validation"]["done_count"] = 512
+
+    analysis = _required_model_finiteness(
+        [jax_result, warp_result],
+        required_models=("octahedron:realistic",),
+        batch_sizes=(512,),
+        implementations=("jax", "warp"),
+        graph_modes=("warp_staged", "warp_staged_ex"),
+    )
+
+    assert analysis["passed"] is False
+    assert [
+        (item["graph_mode"], item["present"], item["finite"]) for item in analysis["failures"]
+    ] == [
+        ("warp_staged", True, False),
+        ("warp_staged_ex", False, False),
+    ]
