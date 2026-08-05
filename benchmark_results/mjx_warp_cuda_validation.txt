@@ -1,0 +1,40 @@
+PR=11
+JOB_ID=13055119
+NODE=dw-1-2
+COMMIT=f3c0f245fc1229fd076e3050b20219998710169c
+STARTED=2026-08-05T12:52:39-06:00
+NVIDIA A100-SXM4-80GB, 580.159.04
+PYTHON_BACKEND gpu
+JAX_VERSION 0.10.1
+MUJOCO_VERSION 3.8.1
+WARP_VERSION 1.12.1
+CUDA_TESTS_BEGIN
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/isuds/robotics/mujoco-truss-gen/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/isuds/robotics/mujoco-truss-gen
+configfile: pyproject.toml
+collecting ... collected 67 items / 62 deselected / 5 selected
+
+tests/test_mjx_env.py::test_warp_graph_modes_step_and_selectively_reset[warp] PASSED [ 20%]
+tests/test_mjx_env.py::test_warp_graph_modes_step_and_selectively_reset[warp_staged] PASSED [ 40%]
+tests/test_mjx_env.py::test_warp_graph_modes_step_and_selectively_reset[warp_staged_ex] PASSED [ 60%]
+tests/test_mjx_env.py::test_warp_and_jax_one_step_behavior_match PASSED  [ 80%]
+tests/test_mjx_env.py::test_warp_domain_randomization_is_independent_and_finite PASSED [100%]
+
+================= 5 passed, 62 deselected in 64.39s (0:01:04) ==================
+CUDA_TESTS_END
+SEEDED_REALISTIC_DIAGNOSTIC_BEGIN
+[jax] tracing realistic octahedron
+[native] tracing realistic octahedron
+[warp_capacity_x1] tracing realistic octahedron
+[warp_capacity_x2] tracing realistic octahedron
+[warp_staged_capacity_x1] tracing realistic octahedron
+[warp_staged_capacity_x2] tracing realistic octahedron
+[warp_staged_ex_capacity_x1] tracing realistic octahedron
+[warp_staged_ex_capacity_x2] tracing realistic octahedron
+Wrote /home/isuds/robotics/mujoco-truss-gen/benchmark_results/pr11_head_validation_13055119/realistic_diagnostic_batch8.json
+Wrote /home/isuds/robotics/mujoco-truss-gen/benchmark_results/pr11_head_validation_13055119/realistic_diagnostic_batch8_traces.npz
+DIAGNOSTIC_GATE {"backend_errors": [], "capacity_differences": {}, "nonfinite_warp_runs": [], "passed": true}
+SEEDED_REALISTIC_DIAGNOSTIC_END
+COMPLETED=2026-08-05T12:57:53-06:00
