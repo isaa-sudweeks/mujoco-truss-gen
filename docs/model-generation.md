@@ -86,8 +86,9 @@ caller.
 
 ## Public Generation Helpers
 
-- `build_world()` creates a base `mujoco.MjSpec` containing a checker-textured
-  ground plane, bright skybox, and key/fill lighting.
+- `build_world(terrain=None)` creates a base `mujoco.MjSpec` containing a
+  checker-textured ground plane, bright skybox, and key/fill lighting. Passing a
+  `TerrainConfig` replaces the plane with a generated checker-textured height field.
 - `build_triangle(spec, node_dict, triangle_dict, realistic=False)` adds truss
   bodies, sites, tendons, actuators, and perimeter constraints to an existing
   spec.
@@ -97,11 +98,14 @@ caller.
   `disable_route_length_constraint=True` on a shape to opt out. With
   `realistic=True`, shared routed node occurrences are cloned and connected to
   connector balls by in-plane bisector rods.
-- `get_mujoco_spec("octahedron", realistic=False, scale=1.0)` and the other
+- `get_mujoco_spec("octahedron", realistic=False, scale=1.0, terrain=None)` and the other
   names in `PRESETS` build built-in presets. Increase or decrease `scale` to
   generate the same preset with different structural tendon lengths. For a
   realistic model, set `TrussPhysicalParameters(connector_rod_length=...)` to
   keep the nominal connector rod length fixed independently of preset scale.
+  Pass `terrain=TerrainConfig(...)` to place the generated robot on an explicit
+  flat, slope, stair, wave, or rough height field. Omitting terrain preserves the
+  existing plane exactly; see [Height-field terrain](terrain.md).
 - `get_mujoco_spec(node_dict, triangle_dict, realistic=False)` builds a custom
   dictionary-defined truss.
 - `get_mujoco_spec(node_dict, shape_dict, realistic=False)` builds a routed

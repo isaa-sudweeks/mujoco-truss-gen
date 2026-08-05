@@ -25,6 +25,7 @@ from mujoco_truss_gen.mujoco_model.controllers import (
 )
 from mujoco_truss_gen.mujoco_model.geometry import triangle_frame
 from mujoco_truss_gen.mujoco_model.model_types import NodeDict, TriangleDict, Vector
+from mujoco_truss_gen.mujoco_model.terrain import TerrainConfig, add_terrain
 
 
 def find_original_node(node_instances: dict[str, list[str]], instance_name: str) -> str | None:
@@ -673,7 +674,7 @@ def create_node_bodies(
         )
 
 
-def build_world() -> mujoco.MjSpec:
+def build_world(terrain: TerrainConfig | None = None) -> mujoco.MjSpec:
     spec = mujoco.MjSpec.from_string(
         f"""
 <mujoco>
@@ -746,4 +747,6 @@ def build_world() -> mujoco.MjSpec:
 </mujoco>
 """
     )
+    if terrain is not None:
+        add_terrain(spec, terrain)
     return spec

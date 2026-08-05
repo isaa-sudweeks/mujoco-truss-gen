@@ -17,6 +17,7 @@ from mujoco_truss_gen.mujoco_model.controllers import (
     AngleBisectorController,
 )
 from mujoco_truss_gen.mujoco_model.tendons import initialize_actuator_lengths
+from mujoco_truss_gen.mujoco_model.terrain import sample_model_terrain_height
 
 ModelSource = mujoco.MjSpec | mujoco.MjModel | str | Path
 
@@ -107,6 +108,20 @@ class MujocoModel:
                 if self.model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE
             ],
             dtype=int,
+        )
+        ground_id = mujoco.mj_name2id(
+            self.model,
+            mujoco.mjtObj.mjOBJ_GEOM,
+            "ground",
+        )
+        self.has_heightfield_terrain = bool(
+            ground_id >= 0
+            and self.model.geom_type[ground_id] == mujoco.mjtGeom.mjGEOM_HFIELD
+        )
+        initial_node_positions = self.get_node_position_matrix()
+        self.initial_node_terrain_clearances = (
+            initial_node_positions[:, 2]
+            - sample_model_terrain_height(self.model, initial_node_positions[:, :2])
         )
         self.wcrm = False
         self.initial_critical_eig = max(self._critical_eig(), 1e-8)
@@ -291,6 +306,7 @@ class MujocoModel:
         if self.model.na:
             self.data.act[:] = self.init_act.copy()
         mujoco.mj_forward(self.model, self.data)
+        self._lift_above_heightfield()
         self.apply_angle_bisector_control()
         initialize_actuator_lengths(self.model, self.data)
         mujoco.mj_forward(self.model, self.data)
@@ -321,6 +337,25 @@ class MujocoModel:
                 orientation,
             )
         mujoco.mj_normalizeQuat(self.model, self.data.qpos)
+
+    def _lift_above_heightfield(self) -> None:
+        if not self.has_heightfield_terrain or not self.pose_position_qpos_indices.size:
+            return
+
+        positions = self.get_node_position_matrix()
+        terrain_heights = sample_model_terrain_height(self.model, positions[:, :2])
+        required_lifts = (
+            terrain_heights + self.initial_node_terrain_clearances - positions[:, 2]
+        )
+        finite_lifts = required_lifts[np.isfinite(required_lifts)]
+        if not finite_lifts.size:
+            return
+        lift = max(0.0, float(np.max(finite_lifts)))
+        if lift <= 0.0:
+            return
+
+        self.data.qpos[self.pose_position_qpos_indices[:, 2]] += lift
+        mujoco.mj_forward(self.model, self.data)
 
     def _pose_position_metadata(self) -> tuple[np.ndarray, np.ndarray]:
         indices: list[list[int]] = []
@@ -587,7 +622,8 @@ class MujocoModel:
         linear_velocities = self.get_node_linear_velocity_matrix()
         if positions.size == 0:
             return 0.0
-        contact_mask = positions[:, 2] < height
+        terrain_heights = sample_model_terrain_height(self.model, positions[:, :2])
+        contact_mask = positions[:, 2] < terrain_heights + height
         return float(np.sum(np.abs(linear_velocities[contact_mask, 0])))
 
 

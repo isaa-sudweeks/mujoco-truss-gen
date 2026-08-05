@@ -1341,6 +1341,9 @@ mesh = [
     { name = "matplotlib" },
     { name = "trimesh" },
 ]
+terrain = [
+    { name = "matplotlib" },
+]
 test = [
     { name = "matplotlib" },
     { name = "pytest" },
@@ -1356,6 +1359,7 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.7" },
     { name = "matplotlib", marker = "extra == 'graph'", specifier = ">=3.7" },
     { name = "matplotlib", marker = "extra == 'mesh'", specifier = ">=3.7" },
+    { name = "matplotlib", marker = "extra == 'terrain'", specifier = ">=3.7" },
     { name = "matplotlib", marker = "extra == 'test'", specifier = ">=3.7" },
     { name = "mujoco", specifier = "==3.8.1" },
     { name = "mujoco-mjx", specifier = "==3.8.1" },
@@ -1370,7 +1374,7 @@ requires-dist = [
     { name = "trimesh", marker = "extra == 'mesh'", specifier = ">=4" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=5.0" },
 ]
-provides-extras = ["dev", "test", "warp", "graph", "mesh"]
+provides-extras = ["dev", "test", "warp", "graph", "terrain", "mesh"]
 
 [[package]]
 name = "mypy"

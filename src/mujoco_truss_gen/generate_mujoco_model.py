@@ -69,6 +69,19 @@ from mujoco_truss_gen.mujoco_model.tendons import (
     initialize_actuator_lengths,
     unique_actuator_name,
 )
+from mujoco_truss_gen.mujoco_model.terrain import (
+    TerrainConfig,
+    TerrainData,
+    TerrainKind,
+    add_terrain,
+    generate_terrain,
+    sample_model_terrain_height,
+)
+from mujoco_truss_gen.mujoco_model.terrain_viewer import (
+    TerrainExplorer,
+    view_terrain,
+    view_terrain_explorer,
+)
 
 
 def main() -> None:
@@ -112,6 +125,10 @@ __all__ = [
     "ShapeDict",
     "TENDON_RGBA",
     "TRUSS_RGBA",
+    "TerrainConfig",
+    "TerrainData",
+    "TerrainExplorer",
+    "TerrainKind",
     "TriangleDict",
     "Vector",
     "add_actuator",
@@ -123,6 +140,7 @@ __all__ = [
     "add_route_length_constraints",
     "add_route_tendon",
     "add_tendon",
+    "add_terrain",
     "actuator_name_for_tendon",
     "build_abstract_shapes",
     "build_abstract_triangle",
@@ -140,12 +158,16 @@ __all__ = [
     "get_perimeter",
     "get_preset_definition",
     "get_route_lengths",
+    "generate_terrain",
     "initialize_actuator_lengths",
     "main",
     "save_xml",
+    "sample_model_terrain_height",
     "unique_actuator_name",
     "view",
     "view_node_velocity",
+    "view_terrain",
+    "view_terrain_explorer",
 ]
 
 

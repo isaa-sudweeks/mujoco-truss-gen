@@ -27,6 +27,7 @@ Supported workflows include:
 - Build abstract slide-joint models or realistic triangle-body models.
 - Save generated MuJoCo XML.
 - Wrap generated models in Gymnasium-compatible environments.
+- Generate configurable flat, sloped, stair, wave, and rough height-field terrain.
 - Convert STL meshes into experimental routed-tube shape dictionaries.
 
 ## Installation
@@ -63,6 +64,12 @@ dependencies:
 - `numpy`
 - `scipy`
 
+Install the optional interactive terrain figures with:
+
+```bash
+python -m pip install "mujoco-truss-gen[terrain]"
+```
+
 ## Quick Start
 
 Generate the built-in octahedron model:
@@ -72,6 +79,23 @@ from mujoco_truss_gen import get_mujoco_spec
 
 spec = get_mujoco_spec("octahedron", realistic=False)
 model = spec.compile()
+```
+
+Generate the same robot on deterministic rough terrain:
+
+```python
+from mujoco_truss_gen import TerrainConfig, get_mujoco_spec
+
+spec = get_mujoco_spec(
+    "octahedron",
+    realistic=False,
+    terrain=TerrainConfig(
+        kind="rough",
+        amplitude=0.15,
+        feature_size=0.8,
+        seed=7,
+    ),
+)
 ```
 
 Save generated XML:
@@ -130,6 +154,9 @@ Use `--realistic` for realistic connector geometry, `--overwrite` to rebuild exi
 entries, or `--include-aliases` to include the unsuffixed Henneberg names that alias
 variant `_1`.
 
+The same site includes an interactive [terrain explorer](https://isaa-sudweeks.github.io/mujoco-truss-gen/terrain.html)
+that previews every height-field family and produces a copyable `TerrainConfig`.
+
 Routed continuous-tube presets such as `tetrahedron` are all-edge-actuated models
 whose route tendons softly constrain each tube to its initial total length. They
 also support `realistic=True`, which clones
@@ -154,6 +181,8 @@ are aliases for variant `_1`.
   preview behavior.
 - [GNN utilities](docs/gnn-utilities.md): extracting graph features and edge
   indices for PyTorch Geometric workflows.
+- [Height-field terrain](docs/terrain.md): terrain families, physical parameters,
+  safe spawning, native/MJX behavior, and interactive figures.
 - [Development](docs/development.md): local setup, tests, linting, formatting,
   and package builds.
 - [MJX-Warp benchmark](docs/benchmarks/mjx_warp.md): compatibility gates,
