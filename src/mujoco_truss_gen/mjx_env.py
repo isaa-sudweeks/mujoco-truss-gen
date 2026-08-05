@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import warnings
+from copy import copy
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -21,6 +22,14 @@ WarpGraphMode = Literal["warp", "warp_staged", "warp_staged_ex"]
 
 _MJX_IMPLEMENTATIONS = frozenset(("jax", "warp"))
 _WARP_GRAPH_MODES = frozenset(("warp", "warp_staged", "warp_staged_ex"))
+
+
+def _copy_model_source_for_env(model_source: ModelSource) -> ModelSource:
+    """Give the MJX environment ownership of caller-supplied compiled models."""
+
+    if isinstance(model_source, mujoco.MjModel):
+        return copy(model_source)
+    return model_source
 
 
 def _configure_integrator_for_backend(
@@ -105,7 +114,7 @@ class MjxNodeVelocityEnv:
         self._validate_config()
         self._domain_randomization = self.config.domain_randomization
 
-        self.mujoco_model = MujocoModel(self.config.model_source)
+        self.mujoco_model = MujocoModel(_copy_model_source_for_env(self.config.model_source))
         model = self.mujoco_model.model
         _configure_integrator_for_backend(
             model,

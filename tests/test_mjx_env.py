@@ -21,7 +21,10 @@ from mujoco_truss_gen import (
     TrussEnvConfig,
     get_mujoco_spec,
 )
-from mujoco_truss_gen.mjx_env import _configure_integrator_for_backend
+from mujoco_truss_gen.mjx_env import (
+    _configure_integrator_for_backend,
+    _copy_model_source_for_env,
+)
 
 
 def _is_indexed_henneberg_variant(preset_name: str) -> bool:
@@ -149,6 +152,23 @@ def test_mjx_backend_integrator_compatibility(
     )
 
     assert model.opt.integrator == expected
+
+
+def test_mjx_backend_integrator_override_does_not_mutate_caller_model() -> None:
+    caller_model = get_mujoco_spec("octahedron", realistic=True).compile()
+    caller_model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+
+    internal_model = _copy_model_source_for_env(caller_model)
+    assert isinstance(internal_model, mujoco.MjModel)
+    _configure_integrator_for_backend(
+        internal_model,
+        "warp",
+        uses_realistic_connectors=True,
+    )
+
+    assert internal_model is not caller_model
+    assert internal_model.opt.integrator == mujoco.mjtIntegrator.mjINT_EULER
+    assert caller_model.opt.integrator == mujoco.mjtIntegrator.mjINT_IMPLICITFAST
 
 
 def test_mjx_implementation_defaults_to_jax_and_reports_no_warp_buffers() -> None:
