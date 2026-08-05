@@ -38,6 +38,13 @@ After a release has been published to PyPI:
 python -m pip install mujoco-truss-gen
 ```
 
+The optional MJX-Warp backend requires an NVIDIA CUDA GPU and is installed
+separately so ordinary MuJoCo/MJX-JAX users do not pull in Warp:
+
+```bash
+python -m pip install "mujoco-truss-gen[warp]"
+```
+
 For local development from a clone:
 
 ```bash
@@ -178,6 +185,8 @@ are aliases for variant `_1`.
   safe spawning, native/MJX behavior, and interactive figures.
 - [Development](docs/development.md): local setup, tests, linting, formatting,
   and package builds.
+- [MJX-Warp benchmark](docs/benchmarks/mjx_warp.md): compatibility gates,
+  reproducible ORC benchmark commands, and the pending adoption decision.
 - [Releasing](docs/releasing.md): automated and manual PyPI release steps.
 - [Roadmap](docs/roadmap.md): known limitations and planned work.
 

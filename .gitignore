@@ -1,4 +1,5 @@
 # Development
+.DS_Store
 MUJOCO_LOG.TXT
 dev.py
 *.stl

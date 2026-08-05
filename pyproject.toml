@@ -59,6 +59,9 @@ test = [
     "matplotlib>=3.7",
     "pytest>=8.0",
 ]
+warp = [
+    "mujoco-mjx[warp]==3.8.1",
+]
 graph = [
     "matplotlib>=3.7",
 ]
@@ -87,6 +90,9 @@ minversion = "8.0"
 addopts = [
     "--strict-config",
     "--strict-markers",
+]
+markers = [
+    "cuda: requires an NVIDIA CUDA device and the optional Warp dependencies",
 ]
 pythonpath = ["src"]
 testpaths = ["tests"]

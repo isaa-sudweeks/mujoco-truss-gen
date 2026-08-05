@@ -306,14 +306,43 @@ actuator types, rendering, and batches containing different model shapes are not
 supported. A different batch size can be used, but it causes JAX to compile a
 separate executable.
 
+MJX-JAX remains the default implementation. An MJX-Warp candidate is available
+for CUDA benchmarking without changing the batch-first API:
+
+```python
+env = MjxNodeVelocityEnv(
+    TrussEnvConfig(get_mujoco_spec("tetrahedron", realistic=False)),
+    mjx_impl="warp",
+    warp_graph_mode="warp_staged",
+    warp_naconmax=32_768,  # total contact capacity across the batch
+    warp_njmax=256,        # constraint capacity per environment
+)
+```
+
+Install it with `python -m pip install "mujoco-truss-gen[warp]"`. Warp requires
+the active JAX default device to be an NVIDIA CUDA GPU; construction fails with
+an actionable error when CUDA or the optional dependency is unavailable.
+Supported graph modes are `warp`, `warp_staged`, and `warp_staged_ex`.
+`buffer_diagnostics(state)` synchronizes and reports Warp contact/constraint
+capacity use, so it is intended for validation and benchmarks rather than the
+compiled training hot path.
+
 Generated truss geoms use ground-only collision masks: robot-ground contact is
 preserved, while internal robot-robot contacts are disabled. Warm JIT throughput
-can be measured without imposing a hardware-specific test threshold:
+and reset costs can be measured with the reproducible benchmark matrix:
 
 ```bash
-python experiments/benchmark_mjx_env.py --preset tetrahedron --batch-sizes 1,64,256
-python experiments/benchmark_mjx_env.py --preset tetrahedron --domain-randomization
+python experiments/benchmark_mjx_env.py
+python experiments/benchmark_mjx_env.py \
+  --models tetrahedron:abstract,octahedron:abstract \
+  --batch-sizes 128,256,512
 ```
+
+Each case runs in a fresh process. The command writes raw results to
+`benchmark_results/mjx_warp_orc.json` and the adoption analysis to
+`docs/benchmarks/mjx_warp.md`. Warp is not eligible for adoption unless the
+representative 1,536-environment workload is at least 1.5x faster than MJX-JAX,
+the CUDA parity tests pass, and no contact/constraint capacity gate fails.
 
 ## Rendering
 

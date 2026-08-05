@@ -183,6 +183,9 @@ def add_terrain(spec: mujoco.MjSpec, config: TerrainConfig) -> TerrainData:
     existing_ground = spec.geom(TERRAIN_GEOM_NAME)
     if existing_ground is not None:
         spec.delete(existing_ground)
+    existing_hfield = spec.hfield(TERRAIN_HFIELD_NAME)
+    if existing_hfield is not None:
+        spec.delete(existing_hfield)
 
     elevation_scale = max(terrain.elevation_range, 1e-6)
     hfield = spec.add_hfield(
@@ -334,8 +337,23 @@ def _spawn_blend_mask(xx: np.ndarray, yy: np.ndarray, config: TerrainConfig) -> 
 
 
 def _maximum_slope(heights: np.ndarray, *, x: np.ndarray, y: np.ndarray) -> float:
-    gradient_y, gradient_x = np.gradient(heights, y, x)
-    return float(np.max(np.hypot(gradient_x, gradient_y)))
+    spacing_x = np.diff(x)[None, :]
+    spacing_y = np.diff(y)[:, None]
+    lower_left = heights[:-1, :-1]
+    lower_right = heights[:-1, 1:]
+    upper_left = heights[1:, :-1]
+    upper_right = heights[1:, 1:]
+
+    lower_gradient_x = (lower_right - lower_left) / spacing_x
+    lower_gradient_y = (upper_right - lower_right) / spacing_y
+    upper_gradient_x = (upper_right - upper_left) / spacing_x
+    upper_gradient_y = (upper_left - lower_left) / spacing_y
+    return float(
+        max(
+            np.max(np.hypot(lower_gradient_x, lower_gradient_y)),
+            np.max(np.hypot(upper_gradient_x, upper_gradient_y)),
+        )
+    )
 
 
 def _limit_slope(

@@ -13,6 +13,7 @@ from mujoco_truss_gen import (
     MujocoNodeVelocityCommandEnv,
     TerrainConfig,
     TrussEnvConfig,
+    add_terrain,
     generate_terrain,
     get_mujoco_spec,
     sample_model_terrain_height,
@@ -102,6 +103,39 @@ def test_rough_terrain_is_seeded_and_respects_slope_limit() -> None:
     assert first.max_generated_slope <= np.tan(np.deg2rad(config.max_slope_degrees)) + 1e-12
 
 
+def test_waves_slope_limit_uses_piecewise_planar_triangle_facets() -> None:
+    config = TerrainConfig(
+        kind="waves",
+        half_size=(12.0, 12.0),
+        resolution=(65, 65),
+        amplitude=0.5,
+        feature_size=0.8,
+        max_slope_degrees=20.0,
+    )
+    terrain = generate_terrain(config)
+    spacing_x, spacing_y = terrain.grid_spacing
+    lower_left = terrain.heights[:-1, :-1]
+    lower_right = terrain.heights[:-1, 1:]
+    upper_left = terrain.heights[1:, :-1]
+    upper_right = terrain.heights[1:, 1:]
+    facet_slopes = np.concatenate(
+        (
+            np.hypot(
+                (lower_right - lower_left) / spacing_x,
+                (upper_right - lower_right) / spacing_y,
+            ).ravel(),
+            np.hypot(
+                (upper_right - upper_left) / spacing_x,
+                (upper_left - lower_left) / spacing_y,
+            ).ravel(),
+        )
+    )
+
+    maximum = np.tan(np.deg2rad(config.max_slope_degrees))
+    assert np.max(facet_slopes) <= maximum + 1e-12
+    assert terrain.max_generated_slope == pytest.approx(np.max(facet_slopes))
+
+
 def test_default_world_remains_plane_and_explicit_terrain_is_heightfield() -> None:
     default_model = get_mujoco_spec("tetrahedron", realistic=False).compile()
     default_ground = default_model.geom("ground")
@@ -122,6 +156,23 @@ def test_default_world_remains_plane_and_explicit_terrain_is_heightfield() -> No
     assert terrain_model.hfield_data.shape == (config.resolution[0] * config.resolution[1],)
     assert int(terrain_ground.contype[0]) == 1
     assert int(terrain_ground.conaffinity[0]) == 1
+
+
+def test_add_terrain_replaces_existing_named_heightfield() -> None:
+    spec = get_mujoco_spec("tetrahedron", realistic=False)
+    add_terrain(spec, _small_config("rough", seed=3))
+    replacement = add_terrain(spec, _small_config("waves", resolution=(17, 21)))
+    model = spec.compile()
+
+    assert model.nhfield == 1
+    assert int(model.hfield_nrow[0]) == replacement.config.resolution[0]
+    assert int(model.hfield_ncol[0]) == replacement.config.resolution[1]
+    xy = np.array(((-2.5, -1.5), (0.0, 0.0), (2.0, 1.0)))
+    np.testing.assert_allclose(
+        sample_model_terrain_height(model, xy),
+        replacement.height_at(xy[:, 0], xy[:, 1]),
+        atol=1e-6,
+    )
 
 
 @pytest.mark.parametrize("kind", TERRAIN_KINDS)
@@ -202,6 +253,27 @@ def test_mjx_heightfield_reset_and_step_are_finite() -> None:
     assert np.all(np.isfinite(np.asarray(obs)))
     assert np.all(np.isfinite(np.asarray(reward)))
     assert not np.any(np.asarray(done))
+
+
+def test_mjx_reset_ignores_nodes_outside_heightfield_extent() -> None:
+    config = TerrainConfig(
+        kind="rough",
+        half_size=(3.0, 3.0),
+        resolution=(17, 17),
+        spawn_flat_radius=0.0,
+        spawn_blend_width=0.0,
+    )
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", scale=10.0, realistic=False, terrain=config),
+            max_steps=2,
+        )
+    )
+    keys = jax.random.split(jax.random.key(9), 1)
+    obs, state = jax.jit(env.reset)(keys)
+
+    assert np.all(np.isfinite(np.asarray(obs)))
+    assert np.all(np.isfinite(np.asarray(state.data.qpos)))
 
 
 def test_view_terrain_and_explorer_render_without_showing() -> None:

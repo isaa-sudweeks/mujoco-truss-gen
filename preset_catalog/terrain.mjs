@@ -171,15 +171,21 @@ function spawnMask(radius, config) {
 
 function maximumSlope(heights, rows, cols, dx, dy) {
   let maximum = 0;
-  for (let row = 0; row < rows; row += 1) {
-    for (let col = 0; col < cols; col += 1) {
-      const left = heights[row * cols + Math.max(col - 1, 0)];
-      const right = heights[row * cols + Math.min(col + 1, cols - 1)];
-      const lower = heights[Math.max(row - 1, 0) * cols + col];
-      const upper = heights[Math.min(row + 1, rows - 1) * cols + col];
-      const gx = (right - left) / (dx * (col === 0 || col === cols - 1 ? 1 : 2));
-      const gy = (upper - lower) / (dy * (row === 0 || row === rows - 1 ? 1 : 2));
-      maximum = Math.max(maximum, Math.hypot(gx, gy));
+  for (let row = 0; row < rows - 1; row += 1) {
+    for (let col = 0; col < cols - 1; col += 1) {
+      const lowerLeft = heights[row * cols + col];
+      const lowerRight = heights[row * cols + col + 1];
+      const upperLeft = heights[(row + 1) * cols + col];
+      const upperRight = heights[(row + 1) * cols + col + 1];
+      const lowerSlope = Math.hypot(
+        (lowerRight - lowerLeft) / dx,
+        (upperRight - lowerRight) / dy,
+      );
+      const upperSlope = Math.hypot(
+        (upperRight - upperLeft) / dx,
+        (upperLeft - lowerLeft) / dy,
+      );
+      maximum = Math.max(maximum, lowerSlope, upperSlope);
     }
   }
   return maximum;
