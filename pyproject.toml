@@ -62,6 +62,9 @@ test = [
 graph = [
     "matplotlib>=3.7",
 ]
+terrain = [
+    "matplotlib>=3.7",
+]
 mesh = [
     "matplotlib>=3.7",
     "trimesh>=4",

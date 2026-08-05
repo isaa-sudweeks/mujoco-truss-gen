@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore MJX-compatible height-field terrain for mujoco-truss-gen.">
+  <title>Terrain explorer · mujoco-truss-gen</title>
+  <link rel="stylesheet" href="terrain.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./">mujoco-truss-gen</a>
+    <nav aria-label="Primary navigation">
+      <a href="./">Preset catalog</a>
+      <a href="terrain.html" aria-current="page">Terrain explorer</a>
+      <a href="https://github.com/isaa-sudweeks/mujoco-truss-gen">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="intro">
+      <p class="eyebrow">Interactive height fields</p>
+      <h1>Shape the ground before the robot touches it.</h1>
+      <p class="lede">Explore terrain in physical MuJoCo units, inspect the realized slope and grid density, then copy the exact <code>TerrainConfig</code> into your model.</p>
+    </section>
+
+    <div class="workspace">
+      <aside class="control-panel" aria-label="Terrain controls">
+        <div class="panel-heading">
+          <div><p class="eyebrow">Generator</p><h2>Terrain controls</h2></div>
+          <button id="reset" class="quiet-button" type="button">Reset</button>
+        </div>
+
+        <label class="field select-field">
+          <span>Terrain family</span>
+          <select id="kind">
+            <option value="flat">Flat</option>
+            <option value="slope">Slope</option>
+            <option value="stairs">Stairs</option>
+            <option value="waves">Waves</option>
+            <option value="rough" selected>Rough</option>
+          </select>
+        </label>
+        <label class="field select-field">
+          <span>Example</span>
+          <select id="example">
+            <option value="custom">Custom settings</option>
+            <option value="gentle-waves">Gentle waves</option>
+            <option value="shallow-stairs">Shallow stairs</option>
+            <option value="coarse-rough">Coarse roughness</option>
+            <option value="steep-rough">Steep roughness</option>
+          </select>
+        </label>
+
+        <div class="control-section">
+          <h3>Shape</h3>
+          <label class="field" data-kinds="waves rough">
+            <span>Elevation amplitude <output data-for="amplitude"></output></span>
+            <input id="amplitude" type="range" min="0" max="0.5" step="0.01" value="0.15">
+          </label>
+          <label class="field" data-kinds="waves rough">
+            <span>Horizontal feature size <output data-for="featureSize"></output></span>
+            <input id="featureSize" type="range" min="0.2" max="3" step="0.05" value="0.8">
+          </label>
+          <label class="field" data-kinds="waves rough">
+            <span>Maximum slope <output data-for="maxSlopeDegrees"></output></span>
+            <input id="maxSlopeDegrees" type="range" min="5" max="65" step="1" value="35">
+          </label>
+          <label class="field" data-kinds="slope">
+            <span>Slope angle <output data-for="slopeAngleDegrees"></output></span>
+            <input id="slopeAngleDegrees" type="range" min="-25" max="25" step="1" value="12">
+          </label>
+          <label class="field" data-kinds="slope stairs">
+            <span>Direction <output data-for="slopeDirectionDegrees"></output></span>
+            <input id="slopeDirectionDegrees" type="range" min="-180" max="180" step="5" value="0">
+          </label>
+          <label class="field" data-kinds="stairs">
+            <span>Stair height <output data-for="stairHeight"></output></span>
+            <input id="stairHeight" type="range" min="0.02" max="0.3" step="0.01" value="0.1">
+          </label>
+          <label class="field" data-kinds="stairs">
+            <span>Stair run <output data-for="stairRun"></output></span>
+            <input id="stairRun" type="range" min="0.2" max="2" step="0.05" value="0.6">
+          </label>
+          <label class="field" data-kinds="rough">
+            <span>Deterministic seed <output data-for="seed"></output></span>
+            <input id="seed" type="range" min="0" max="99" step="1" value="7">
+          </label>
+        </div>
+
+        <div class="control-section">
+          <h3>Grid and spawn</h3>
+          <label class="field select-field">
+            <span>Resolution</span>
+            <select id="resolution">
+              <option value="33">33 × 33</option>
+              <option value="65">65 × 65</option>
+              <option value="129" selected>129 × 129</option>
+              <option value="257">257 × 257</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Terrain half-size <output data-for="halfSizeX"></output></span>
+            <input id="halfSizeX" type="range" min="3" max="20" step="0.5" value="12">
+          </label>
+          <label class="field">
+            <span>Flat spawn radius <output data-for="spawnFlatRadius"></output></span>
+            <input id="spawnFlatRadius" type="range" min="0" max="2.5" step="0.05" value="1.5">
+          </label>
+          <label class="field">
+            <span>Spawn blend width <output data-for="spawnBlendWidth"></output></span>
+            <input id="spawnBlendWidth" type="range" min="0" max="2" step="0.05" value="0.75">
+          </label>
+        </div>
+
+        <p id="error" class="error" role="alert" hidden></p>
+        <div class="actions">
+          <button id="copy-config" class="primary-button" type="button">Copy Python config</button>
+          <button id="copy-link" class="quiet-button" type="button">Copy share link</button>
+        </div>
+      </aside>
+
+      <section class="visuals" aria-live="polite">
+        <div class="metrics" id="metrics"></div>
+        <article class="plot-card map-card">
+          <div class="plot-heading">
+            <div><p class="eyebrow">Top-down field</p><h2 id="map-title">Rough terrain</h2></div>
+            <span class="compatibility">Fixed-shape MJX model</span>
+          </div>
+          <div class="canvas-wrap" id="map-wrap">
+            <canvas id="height-map" width="800" height="620" aria-label="Top-down terrain height map"></canvas>
+            <div id="tooltip" class="tooltip" hidden></div>
+          </div>
+          <div class="legend"><span>Lower</span><span class="legend-bar" aria-hidden="true"></span><span>Higher</span></div>
+        </article>
+
+        <article class="plot-card profile-card">
+          <div class="plot-heading"><div><p class="eyebrow">Travel direction</p><h2>+X centerline profile</h2></div></div>
+          <canvas id="profile" width="1000" height="300" aria-label="Terrain elevation along the X-axis"></canvas>
+        </article>
+
+        <article class="code-card">
+          <div class="plot-heading"><div><p class="eyebrow">Library handoff</p><h2>Python configuration</h2></div></div>
+          <pre><code id="python-config"></code></pre>
+          <p>The browser and Python implementations share the same deterministic terrain contract. MuJoCo triangulates each cell while preserving these grid dimensions.</p>
+        </article>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <p>World +X is the nominal travel direction. The robot footprint is illustrative; model integration derives clearance from the generated robot.</p>
+  </footer>
+  <script type="module" src="terrain-app.mjs"></script>
+</body>
+</html>

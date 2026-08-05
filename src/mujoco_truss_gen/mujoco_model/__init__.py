@@ -47,6 +47,19 @@ from mujoco_truss_gen.mujoco_model.sensors import (
     AccelerometerConfig,
     add_node_accelerometers,
 )
+from mujoco_truss_gen.mujoco_model.terrain import (
+    TerrainConfig,
+    TerrainData,
+    TerrainKind,
+    add_terrain,
+    generate_terrain,
+    sample_model_terrain_height,
+)
+from mujoco_truss_gen.mujoco_model.terrain_viewer import (
+    TerrainExplorer,
+    view_terrain,
+    view_terrain_explorer,
+)
 
 __all__ = [
     "AccelerometerConfig",
@@ -58,6 +71,10 @@ __all__ = [
     "HENNEBERG_PRESET_VARIANT_COUNTS",
     "HENNEBERG_RIGIDITY_THRESHOLD",
     "TrussPhysicalParameters",
+    "TerrainConfig",
+    "TerrainData",
+    "TerrainExplorer",
+    "TerrainKind",
     "USEVITCH_GRAPH_LABELS",
     "build_abstract_shapes",
     "build_abstract_triangle",
@@ -66,6 +83,7 @@ __all__ = [
     "build_triangle",
     "build_world",
     "add_node_accelerometers",
+    "add_terrain",
     "create_node_bodies",
     "create_triangle_bodies",
     "get_edge_index",
@@ -80,9 +98,13 @@ __all__ = [
     "get_preset_definition",
     "get_usevitch_graph_definition",
     "get_route_lengths",
+    "generate_terrain",
+    "sample_model_terrain_height",
     "save_xml",
     "view",
     "view_graph",
+    "view_terrain",
+    "view_terrain_explorer",
     "view_node_velocity",
     "view_node_velocity_terminal",
 ]

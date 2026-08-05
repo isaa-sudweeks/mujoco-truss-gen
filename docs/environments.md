@@ -57,6 +57,19 @@ example, observed x positions are divided by the initial x span. In the
 relative-observation envs, node velocity components are normalized the same
 way. Zero-width axes use a divisor of `1.0`.
 
+## Terrain Model Sources
+
+Terrain is part of the MuJoCo model source. Build a static terrain for either the
+native or MJX environment by passing `terrain=TerrainConfig(...)` to
+`get_mujoco_spec()`; see [Height-field terrain](terrain.md). Height-field resets
+preserve initial local ground clearance after X/Y/yaw transforms, and slip shaping
+uses local terrain height.
+
+Native environments can use `DomainRandomizationConfig.model_factory` to rebuild
+terrain on each reset. `MjxNodeVelocityEnv` owns one fixed compiled terrain and does
+not support `model_factory`; use separate MJX environment instances for different
+terrain configurations.
+
 ## Domain Randomization
 
 Use `DomainRandomizationConfig` to sample a new domain on each environment

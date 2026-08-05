@@ -51,6 +51,7 @@ from mujoco_truss_gen.mujoco_model.tendons import (
     add_tendon,
     edge_key,
 )
+from mujoco_truss_gen.mujoco_model.terrain import TerrainConfig
 
 STL_SOURCE_METADATA_KEY = "_mujoco_truss_gen_source"
 STL_SOURCE_METADATA_VALUE = "stl"
@@ -1214,6 +1215,7 @@ def get_mujoco_spec(
     realistic: bool = False,
     scale: float = 1.0,
     physical_params: TrussPhysicalParameters | None = None,
+    terrain: TerrainConfig | None = None,
     accelerometer_config: AccelerometerConfig | dict[str, Any] | None | object = (
         _DEFAULT_ACCELEROMETER_CONFIG
     ),
@@ -1224,7 +1226,7 @@ def get_mujoco_spec(
         raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
 
     params = physical_params or TrussPhysicalParameters()
-    spec = build_world()
+    spec = build_world(terrain=terrain)
     if len(args) == 2:
         if scale != 1.0:
             raise ValueError("scale is only supported when building a named preset.")

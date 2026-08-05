@@ -21,6 +21,10 @@ the package is treated as stable research infrastructure.
 
 ## Known Limitations
 
+- Explicit height-field terrain is fixed for each compiled `MjxNodeVelocityEnv`;
+  batched per-element terrain resampling is not yet exposed.
+- Terrain geometry is not included in policy observations. Policies currently
+  adapt from robot state and contact response rather than previewing upcoming height.
 - The named preset registry includes hand-authored base structures plus
   generated Usevitch et al. graph presets named by paper graph label.
 - Custom robot definitions are supported through dictionaries.

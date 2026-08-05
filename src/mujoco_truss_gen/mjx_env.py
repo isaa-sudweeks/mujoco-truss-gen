@@ -259,6 +259,7 @@ class MjxNodeVelocityEnv:
             ],
             dtype=jnp.int32,
         )
+        self._initialize_terrain_metadata(model)
         free_qpos_adrs = self.mujoco_model.free_joint_qpos_adrs
         self._pose_position_qpos_indices = jnp.asarray(
             self.mujoco_model.pose_position_qpos_indices, dtype=jnp.int32
@@ -469,6 +470,7 @@ class MjxNodeVelocityEnv:
         )
         data = data.replace(qpos=self._apply_initial_pose(data.qpos, domain_randomization))
         data = mjx.forward(model, data)
+        data = self._lift_above_terrain(model, data)
         data = self._angle_bisector_controller.initialize(data)
         if self._reset_act_adrs.size:
             act = data.act.at[self._reset_act_adrs].set(data.ten_length[self._reset_tendon_ids])
@@ -835,6 +837,110 @@ class MjxNodeVelocityEnv:
     def _center_of_mass(self, data: mjx.Data) -> jax.Array:
         return jnp.mean(data.xpos[self._node_body_ids], axis=0)
 
+    def _initialize_terrain_metadata(self, model: mujoco.MjModel) -> None:
+        ground_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "ground")
+        self._terrain_mode = "none"
+        self._terrain_plane_z = 0.0
+        self._terrain_values = jnp.zeros((1, 1), dtype=self._data_template.qpos.dtype)
+        self._terrain_x_min = 0.0
+        self._terrain_x_max = 0.0
+        self._terrain_y_min = 0.0
+        self._terrain_y_max = 0.0
+        self._terrain_elevation_scale = 0.0
+        if ground_id >= 0 and model.geom_type[ground_id] == mujoco.mjtGeom.mjGEOM_PLANE:
+            self._terrain_mode = "plane"
+            self._terrain_plane_z = float(model.geom_pos[ground_id, 2])
+        elif ground_id >= 0 and model.geom_type[ground_id] == mujoco.mjtGeom.mjGEOM_HFIELD:
+            self._terrain_mode = "hfield"
+            hfield_id = int(model.geom_dataid[ground_id])
+            nrow = int(model.hfield_nrow[hfield_id])
+            ncol = int(model.hfield_ncol[hfield_id])
+            address = int(model.hfield_adr[hfield_id])
+            radius_x, radius_y, elevation_scale, _base_depth = model.hfield_size[hfield_id]
+            position = model.geom_pos[ground_id]
+            self._terrain_values = self.mjx_model.hfield_data[
+                address : address + nrow * ncol
+            ].reshape(nrow, ncol)
+            self._terrain_x_min = float(position[0] - radius_x)
+            self._terrain_x_max = float(position[0] + radius_x)
+            self._terrain_y_min = float(position[1] - radius_y)
+            self._terrain_y_max = float(position[1] + radius_y)
+            self._terrain_plane_z = float(position[2])
+            self._terrain_elevation_scale = float(elevation_scale)
+
+        initial_positions = self.mujoco_model.get_node_position_matrix()
+        initial_heights = np.asarray(
+            self._terrain_heights(jnp.asarray(initial_positions[:, :2]))
+        )
+        self._initial_node_terrain_clearances = jnp.asarray(
+            initial_positions[:, 2] - initial_heights,
+            dtype=self._data_template.qpos.dtype,
+        )
+
+    def _terrain_heights(self, xy: jax.Array) -> jax.Array:
+        if self._terrain_mode == "none":
+            return jnp.full(xy.shape[:-1], -jnp.inf, dtype=xy.dtype)
+        if self._terrain_mode == "plane":
+            return jnp.full(xy.shape[:-1], self._terrain_plane_z, dtype=xy.dtype)
+
+        nrow, ncol = self._terrain_values.shape
+        x = xy[..., 0]
+        y = xy[..., 1]
+        inside = jnp.logical_and(
+            jnp.logical_and(x >= self._terrain_x_min, x <= self._terrain_x_max),
+            jnp.logical_and(y >= self._terrain_y_min, y <= self._terrain_y_max),
+        )
+        col = jnp.clip(
+            (x - self._terrain_x_min)
+            / (self._terrain_x_max - self._terrain_x_min)
+            * (ncol - 1),
+            0.0,
+            ncol - 1,
+        )
+        row = jnp.clip(
+            (y - self._terrain_y_min)
+            / (self._terrain_y_max - self._terrain_y_min)
+            * (nrow - 1),
+            0.0,
+            nrow - 1,
+        )
+        col0 = jnp.floor(col).astype(jnp.int32)
+        row0 = jnp.floor(row).astype(jnp.int32)
+        col1 = jnp.minimum(col0 + 1, ncol - 1)
+        row1 = jnp.minimum(row0 + 1, nrow - 1)
+        col_fraction = col - col0
+        row_fraction = row - row0
+        lower_left = self._terrain_values[row0, col0]
+        lower_right = self._terrain_values[row0, col1]
+        upper_left = self._terrain_values[row1, col0]
+        upper_right = self._terrain_values[row1, col1]
+        lower_triangle = (
+            (1.0 - col_fraction) * lower_left
+            + (col_fraction - row_fraction) * lower_right
+            + row_fraction * upper_right
+        )
+        upper_triangle = (
+            (1.0 - row_fraction) * lower_left
+            + (row_fraction - col_fraction) * upper_left
+            + col_fraction * upper_right
+        )
+        normalized = jnp.where(col_fraction >= row_fraction, lower_triangle, upper_triangle)
+        physical = self._terrain_plane_z + normalized * self._terrain_elevation_scale
+        return jnp.where(inside, physical, -jnp.inf)
+
+    def _lift_above_terrain(self, model: mjx.Model, data: mjx.Data) -> mjx.Data:
+        if self._terrain_mode != "hfield" or not self._pose_position_qpos_indices.size:
+            return data
+        positions = data.xpos[self._node_body_ids]
+        required_lifts = (
+            self._terrain_heights(positions[:, :2])
+            + self._initial_node_terrain_clearances
+            - positions[:, 2]
+        )
+        lift = jnp.maximum(jnp.max(required_lifts), 0.0)
+        qpos = data.qpos.at[self._pose_position_qpos_indices[:, 2]].add(lift)
+        return mjx.forward(model, data.replace(qpos=qpos))
+
     def _compute_reward(
         self,
         data: mjx.Data,
@@ -947,7 +1053,8 @@ class MjxNodeVelocityEnv:
     def _slip_penalty(self, data: mjx.Data) -> jax.Array:
         positions = data.xpos[self._node_body_ids]
         velocities = data.cvel[self._node_body_ids, 3:]
-        contact_mask = positions[:, 2] < float(self.config.slip_height)
+        terrain_heights = self._terrain_heights(positions[:, :2])
+        contact_mask = positions[:, 2] < terrain_heights + float(self.config.slip_height)
         return jnp.sum(jnp.where(contact_mask, jnp.abs(velocities[:, 0]), 0.0))
 
     def _rigidity_body_metadata(

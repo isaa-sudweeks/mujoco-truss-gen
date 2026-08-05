@@ -4,7 +4,9 @@
 <style>
 :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; background:#111318; color:#eef1f6 }
 body { margin:0; padding:2rem; } header { max-width:1100px; margin:0 auto 1.5rem; }
-h1 { margin-bottom:.35rem } .summary { color:#aeb7c6 } .controls { display:flex; gap:.75rem; flex-wrap:wrap; margin-top:1rem }
+.topline { display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap }
+h1 { margin-bottom:.35rem } .site-nav { display:flex; gap:1rem } .site-nav a { color:#72d6a1; text-decoration:none; font-weight:700 }
+.summary { color:#aeb7c6 } .controls { display:flex; gap:.75rem; flex-wrap:wrap; margin-top:1rem }
 input,select { padding:.7rem .85rem; background:#20242d; color:inherit; border:1px solid #3b4250; border-radius:.5rem }
 .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:1rem; max-width:1600px; margin:auto }
 .card { overflow:hidden; background:#1a1e26; border:1px solid #303744; border-radius:.75rem }
@@ -12,7 +14,8 @@ input,select { padding:.7rem .85rem; background:#20242d; color:inherit; border:1
 .body { padding:.85rem 1rem } h2 { font-size:.95rem; overflow-wrap:anywhere; margin:0 0 .55rem }
 p { margin:.35rem 0; color:#c1c9d6; font-size:.88rem } .rank { color:#72d6a1; font-weight:700 }
 .family { color:#8da2c4 } code { color:#f4c36b } .failed { border-color:#8f3e48 } pre { white-space:pre-wrap; color:#ff9da8 }
-</style></head><body><header><h1>MuJoCo truss preset catalog</h1>
+</style></head><body><header><div class="topline"><h1>MuJoCo truss preset catalog</h1>
+<nav class="site-nav" aria-label="Primary navigation"><a href="terrain.html">Terrain explorer</a><a href="https://github.com/isaa-sudweeks/mujoco-truss-gen">GitHub</a></nav></div>
 <div class="summary">402 presets ranked by initial worst-case rigidity index; 1 failures.</div>
 <div class="controls"><input id="search" type="search" placeholder="Search preset name">
 <select id="family"><option value="">All families</option><option>Built-in</option><option>Usevitch</option><option>Henneberg</option><option>Failed</option></select></div>
