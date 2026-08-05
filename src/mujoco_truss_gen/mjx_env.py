@@ -26,10 +26,16 @@ _WARP_GRAPH_MODES = frozenset(("warp", "warp_staged", "warp_staged_ex"))
 def _configure_integrator_for_backend(
     model: mujoco.MjModel,
     implementation: str,
+    *,
+    uses_realistic_connectors: bool,
 ) -> None:
-    """Use a stable supported integrator for the selected MJX backend."""
+    """Use Euler for realistic Warp models with unstable implicitfast dynamics."""
 
-    if implementation == "warp" and model.opt.integrator == mujoco.mjtIntegrator.mjINT_IMPLICITFAST:
+    if (
+        implementation == "warp"
+        and uses_realistic_connectors
+        and model.opt.integrator == mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+    ):
         model.opt.integrator = mujoco.mjtIntegrator.mjINT_EULER
 
 
@@ -101,7 +107,11 @@ class MjxNodeVelocityEnv:
 
         self.mujoco_model = MujocoModel(self.config.model_source)
         model = self.mujoco_model.model
-        _configure_integrator_for_backend(model, self.mjx_impl)
+        _configure_integrator_for_backend(
+            model,
+            self.mjx_impl,
+            uses_realistic_connectors=self.mujoco_model._uses_realistic_connector_balls(),
+        )
         mujoco.mj_forward(model, self.mujoco_model.data)
         if (
             self._domain_randomization is not None

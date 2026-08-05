@@ -110,22 +110,43 @@ def test_mjx_node_velocity_env_constructs_with_sparse_mass_matrix() -> None:
 
 
 @pytest.mark.parametrize(
-    ("implementation", "requested", "expected"),
+    ("implementation", "uses_realistic_connectors", "requested", "expected"),
     (
-        ("jax", mujoco.mjtIntegrator.mjINT_IMPLICITFAST, mujoco.mjtIntegrator.mjINT_IMPLICITFAST),
-        ("warp", mujoco.mjtIntegrator.mjINT_IMPLICITFAST, mujoco.mjtIntegrator.mjINT_EULER),
-        ("warp", mujoco.mjtIntegrator.mjINT_RK4, mujoco.mjtIntegrator.mjINT_RK4),
+        (
+            "jax",
+            True,
+            mujoco.mjtIntegrator.mjINT_IMPLICITFAST,
+            mujoco.mjtIntegrator.mjINT_IMPLICITFAST,
+        ),
+        (
+            "warp",
+            False,
+            mujoco.mjtIntegrator.mjINT_IMPLICITFAST,
+            mujoco.mjtIntegrator.mjINT_IMPLICITFAST,
+        ),
+        (
+            "warp",
+            True,
+            mujoco.mjtIntegrator.mjINT_IMPLICITFAST,
+            mujoco.mjtIntegrator.mjINT_EULER,
+        ),
+        ("warp", True, mujoco.mjtIntegrator.mjINT_RK4, mujoco.mjtIntegrator.mjINT_RK4),
     ),
 )
 def test_mjx_backend_integrator_compatibility(
     implementation: str,
+    uses_realistic_connectors: bool,
     requested: mujoco.mjtIntegrator,
     expected: mujoco.mjtIntegrator,
 ) -> None:
     model = get_mujoco_spec("tetrahedron", realistic=False).compile()
     model.opt.integrator = requested
 
-    _configure_integrator_for_backend(model, implementation)
+    _configure_integrator_for_backend(
+        model,
+        implementation,
+        uses_realistic_connectors=uses_realistic_connectors,
+    )
 
     assert model.opt.integrator == expected
 
@@ -501,8 +522,8 @@ def test_warp_graph_modes_step_and_selectively_reset(graph_mode: str) -> None:
         warp_naconmax=128 * batch_size,
         warp_njmax=256,
     )
-    assert env.mujoco_model.model.opt.integrator == mujoco.mjtIntegrator.mjINT_EULER
-    assert int(env.mjx_model.opt.integrator) == int(mujoco.mjtIntegrator.mjINT_EULER)
+    assert env.mujoco_model.model.opt.integrator == mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+    assert int(env.mjx_model.opt.integrator) == int(mujoco.mjtIntegrator.mjINT_IMPLICITFAST)
     reset = jax.jit(env.reset)
     step = jax.jit(env.step)
     reset_where = jax.jit(env.reset_where)
