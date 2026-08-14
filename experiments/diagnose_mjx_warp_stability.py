@@ -23,6 +23,9 @@ from mujoco_truss_gen import (
 )
 from mujoco_truss_gen.mujoco_model.model import MujocoModel
 
+_REPRODUCTION_DATA_FIELDS = ("time", "qpos", "qvel", "act", "ctrl", "qacc_warmstart")
+_REPRODUCTION_FORMAT_VERSION = 2
+
 
 def _keys(seed: int, batch_size: int) -> jax.Array:
     return jax.random.split(jax.random.key(seed), batch_size)
@@ -35,8 +38,97 @@ def _scalar_at(value: Any, index: int) -> float:
 def _data_snapshot(state: Any) -> dict[str, np.ndarray]:
     return {
         name: np.array(jax.device_get(getattr(state.data, name)), copy=True)
-        for name in ("time", "qpos", "qvel", "act", "ctrl", "qacc_warmstart")
+        for name in _REPRODUCTION_DATA_FIELDS
     }
+
+
+def _save_batch_reproduction(
+    path: Path,
+    state: Any,
+    actions: np.ndarray,
+    *,
+    environment_index: int,
+    failing_qpos: np.ndarray,
+    failing_qvel: np.ndarray,
+    warp_naconmax: int,
+    warp_njmax: int,
+) -> None:
+    """Capture the full batch immediately before an offending transition."""
+
+    data = _data_snapshot(state)
+    payload = {
+        "format_version": np.asarray(_REPRODUCTION_FORMAT_VERSION, dtype=np.int64),
+        "environment_index": np.asarray(environment_index, dtype=np.int64),
+        "actions": np.asarray(actions, dtype=np.float32)[None, ...],
+        "state_step_count": np.asarray(jax.device_get(state.step_count)),
+        "state_node_commands": np.asarray(jax.device_get(state.node_commands)),
+        "failing_qpos": np.asarray(failing_qpos),
+        "failing_qvel": np.asarray(failing_qvel),
+        "warp_naconmax": np.asarray(warp_naconmax, dtype=np.int64),
+        "warp_njmax": np.asarray(warp_njmax, dtype=np.int64),
+    }
+    payload.update({f"state_{name}": value for name, value in data.items()})
+    payload.update(
+        {
+            f"domain_{field.name}": np.asarray(
+                jax.device_get(getattr(state.domain_randomization, field.name))
+            )
+            for field in fields(state.domain_randomization)
+        }
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(path, **payload)
+
+
+def _load_batch_reproduction(path: Path) -> dict[str, Any]:
+    with np.load(path) as saved:
+        version = int(saved["format_version"]) if "format_version" in saved else 1
+        if version != _REPRODUCTION_FORMAT_VERSION:
+            raise ValueError(
+                f"Unsupported reproduction format {version}; recapture with the current "
+                "diagnostic so the shared Warp batch is preserved."
+            )
+        initial = {name: np.asarray(saved[f"state_{name}"]) for name in _REPRODUCTION_DATA_FIELDS}
+        domain = {
+            name.removeprefix("domain_"): np.asarray(saved[name])
+            for name in saved.files
+            if name.startswith("domain_")
+        }
+        return {
+            "initial": initial,
+            "step_count": np.asarray(saved["state_step_count"]),
+            "node_commands": np.asarray(saved["state_node_commands"]),
+            "domain_randomization": domain,
+            "actions": np.asarray(saved["actions"]),
+            "environment_index": int(saved["environment_index"]),
+            "warp_naconmax": int(saved["warp_naconmax"]),
+            "warp_njmax": int(saved["warp_njmax"]),
+        }
+
+
+def _restore_mjx_state(env: MjxNodeVelocityEnv, state: Any, reproduction: dict[str, Any]) -> Any:
+    domain_randomization = replace(
+        state.domain_randomization,
+        **{
+            name: jnp.asarray(value)
+            for name, value in reproduction["domain_randomization"].items()
+        },
+    )
+    data = state.data.replace(
+        **{name: jnp.asarray(value) for name, value in reproduction["initial"].items()}
+    )
+
+    def forward_one(single_data: Any, domain: Any) -> Any:
+        return mjx.forward(env._model_for_domain(domain), single_data)
+
+    data = jax.jit(jax.vmap(forward_one))(data, domain_randomization)
+    return replace(
+        state,
+        data=data,
+        step_count=jnp.asarray(reproduction["step_count"]),
+        node_commands=jnp.asarray(reproduction["node_commands"]),
+        domain_randomization=domain_randomization,
+    )
 
 
 def _capacity_defaults(
@@ -109,11 +201,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     reset_keys = _keys(args.seed, args.batch_size)
     observation, state = reset(reset_keys)
     jax.block_until_ready(observation)
-    episode_initial_state = _data_snapshot(state)
-    episode_action_counts = np.zeros(args.batch_size, dtype=np.int32)
-    episode_actions = np.empty(
-        (args.episode_steps, args.batch_size, env.action_size), dtype=np.float32
-    )
 
     rng = np.random.default_rng(args.seed)
     maximums = {
@@ -139,13 +226,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 args.speed,
                 size=(args.batch_size, env.action_size),
             ).astype(np.float32)
-        episode_actions[episode_action_counts, np.arange(args.batch_size)] = actions_array
-        episode_action_counts += 1
         actions = jnp.asarray(
             actions_array,
             dtype=jnp.float32,
         )
         step_keys = _keys(args.seed + step_index + 1, args.batch_size)
+        pre_step_state = state
+        pre_step_actions = actions_array.copy()
         observation, state, reward, done, info = step(step_keys, state, actions)
         jax.block_until_ready(observation)
         completed_steps = step_index + 1
@@ -190,21 +277,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             environment_index = int(offending_environments[0])
             finite = bool(finite_by_environment[environment_index])
             reproduction_path = Path(args.reproduction)
-            reproduction_path.parent.mkdir(parents=True, exist_ok=True)
-            action_count = int(episode_action_counts[environment_index])
-            np.savez_compressed(
+            _save_batch_reproduction(
                 reproduction_path,
-                initial_qpos=episode_initial_state["qpos"][environment_index],
-                initial_qvel=episode_initial_state["qvel"][environment_index],
-                initial_act=episode_initial_state["act"][environment_index],
-                initial_ctrl=episode_initial_state["ctrl"][environment_index],
-                initial_time=episode_initial_state["time"][environment_index],
-                initial_qacc_warmstart=episode_initial_state["qacc_warmstart"][environment_index],
-                actions=episode_actions[:action_count, environment_index],
+                pre_step_state,
+                pre_step_actions,
+                environment_index=environment_index,
                 failing_qpos=qpos[environment_index],
                 failing_qvel=qvel[environment_index],
-                warp_naconmax=np.asarray(diagnostics["contact_capacity"], dtype=np.int64),
-                warp_njmax=np.asarray(diagnostics["constraint_capacity"], dtype=np.int64),
+                warp_naconmax=int(diagnostics["contact_capacity"]),
+                warp_njmax=int(diagnostics["constraint_capacity"]),
             )
             first_outlier = {
                 "step": completed_steps,
@@ -223,7 +304,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 },
                 "buffer_diagnostics": diagnostics,
                 "reproduction": str(reproduction_path),
-                "reproduction_action_count": action_count,
+                "reproduction_action_count": 1,
+                "reproduction_batch_size": args.batch_size,
             }
             break
 
@@ -232,10 +314,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             reset_keys = _keys(args.seed + args.steps + step_index + 1, args.batch_size)
             observation, state = reset_where(reset_keys, state, jnp.asarray(done_array))
             jax.block_until_ready(observation)
-            reset_snapshot = _data_snapshot(state)
-            for name, values in episode_initial_state.items():
-                values[done_array] = reset_snapshot[name][done_array]
-            episode_action_counts[done_array] = 0
 
     return {
         "topology": args.topology,
@@ -260,16 +338,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def replay(args: argparse.Namespace) -> dict[str, Any]:
-    with np.load(args.replay) as saved:
-        initial = {name: saved[f"initial_{name}"] for name in ("qpos", "qvel", "act", "ctrl")}
-        initial["time"] = saved["initial_time"]
-        initial["qacc_warmstart"] = saved["initial_qacc_warmstart"]
-        actions = np.asarray(saved["actions"])
-        warp_naconmax = int(saved["warp_naconmax"])
-        warp_njmax = int(saved["warp_njmax"])
+    reproduction = _load_batch_reproduction(Path(args.replay))
+    initial = reproduction["initial"]
+    actions = reproduction["actions"]
+    environment_index = reproduction["environment_index"]
+    batch_size = int(initial["qpos"].shape[0])
 
     if args.implementation == "native":
-        return _replay_native(args, initial, actions)
+        native_initial = {name: value[environment_index] for name, value in initial.items()}
+        return _replay_native(args, native_initial, actions[:, environment_index])
 
     model_source = get_mujoco_spec(args.topology, realistic=args.realistic)
     model_source.option.integrator = {
@@ -287,23 +364,14 @@ def replay(args: argparse.Namespace) -> dict[str, Any]:
     if args.implementation == "warp":
         env_kwargs.update(
             warp_graph_mode=args.graph_mode,
-            warp_naconmax=warp_naconmax,
-            warp_njmax=warp_njmax,
+            warp_naconmax=reproduction["warp_naconmax"],
+            warp_njmax=reproduction["warp_njmax"],
         )
     env = MjxNodeVelocityEnv(config, **env_kwargs)
     reset = jax.jit(env.reset)
     step = jax.jit(env.step)
-    observation, state = reset(_keys(args.seed, 1))
-
-    def forward_one(data: Any, domain: Any) -> Any:
-        model = env._model_for_domain(domain)
-        return mjx.forward(
-            model,
-            data.replace(**{name: jnp.asarray(value) for name, value in initial.items()}),
-        )
-
-    data = jax.jit(jax.vmap(forward_one))(state.data, state.domain_randomization)
-    state = replace(state, data=data)
+    _, state = reset(_keys(args.seed, batch_size))
+    state = _restore_mjx_state(env, state, reproduction)
     observation = env._get_obs(state)
     jax.block_until_ready(observation)
 
@@ -312,36 +380,44 @@ def replay(args: argparse.Namespace) -> dict[str, Any]:
     trace_raw_velocity = []
     trace_reward = []
     first_outlier = None
-    for step_index, action in enumerate(actions, start=1):
+    for step_index, action_batch in enumerate(actions, start=1):
         observation, state, reward, done, info = step(
-            _keys(args.seed + step_index, 1),
+            _keys(args.seed + step_index, batch_size),
             state,
-            jnp.asarray(action[None, :], dtype=jnp.float32),
+            jnp.asarray(action_batch, dtype=jnp.float32),
         )
         jax.block_until_ready(observation)
-        qpos = np.asarray(jax.device_get(state.data.qpos[0]))
-        qvel = np.asarray(jax.device_get(state.data.qvel[0]))
-        raw_velocity = float(jax.device_get(info["forward_velocity_raw"][0]))
-        reward_value = float(jax.device_get(reward[0]))
+        qpos = np.asarray(jax.device_get(state.data.qpos))
+        qvel = np.asarray(jax.device_get(state.data.qvel))
+        raw_velocity = np.asarray(jax.device_get(info["forward_velocity_raw"]))
+        reward_value = np.asarray(jax.device_get(reward))
         trace_qpos.append(qpos)
         trace_qvel.append(qvel)
         trace_raw_velocity.append(raw_velocity)
         trace_reward.append(reward_value)
-        finite = bool(
-            np.all(np.isfinite(qpos))
-            and np.all(np.isfinite(qvel))
-            and np.isfinite(raw_velocity)
-            and np.isfinite(reward_value)
+        finite_by_environment = (
+            np.all(np.isfinite(qpos), axis=1)
+            & np.all(np.isfinite(qvel), axis=1)
+            & np.isfinite(raw_velocity)
+            & np.isfinite(reward_value)
         )
-        if first_outlier is None and (not finite or abs(raw_velocity) >= args.velocity_threshold):
+        qvel_max_by_environment = np.max(np.abs(qvel), axis=1)
+        offending_environments = np.flatnonzero(
+            ~finite_by_environment
+            | (np.abs(raw_velocity) >= args.velocity_threshold)
+            | (qvel_max_by_environment >= args.velocity_threshold)
+        )
+        if first_outlier is None and offending_environments.size:
+            replay_environment = int(offending_environments[0])
             first_outlier = {
                 "step": step_index,
-                "finite": finite,
-                "forward_velocity_raw": raw_velocity,
-                "reward": reward_value,
-                "done": bool(jax.device_get(done[0])),
-                "qpos_max_abs": float(np.max(np.abs(qpos))),
-                "qvel_max_abs": float(np.max(np.abs(qvel))),
+                "environment_index": replay_environment,
+                "finite": bool(finite_by_environment[replay_environment]),
+                "forward_velocity_raw": float(raw_velocity[replay_environment]),
+                "reward": float(reward_value[replay_environment]),
+                "done": bool(np.asarray(jax.device_get(done))[replay_environment]),
+                "qpos_max_abs": float(np.max(np.abs(qpos[replay_environment]))),
+                "qvel_max_abs": float(np.max(np.abs(qvel[replay_environment]))),
                 "buffer_diagnostics": env.buffer_diagnostics(state),
             }
 
@@ -360,6 +436,8 @@ def replay(args: argparse.Namespace) -> dict[str, Any]:
         "implementation": args.implementation,
         "requested_integrator": args.integrator,
         "effective_integrator": int(env.mujoco_model.model.opt.integrator),
+        "batch_size": batch_size,
+        "captured_environment_index": environment_index,
         "action_count": len(actions),
         "first_outlier": first_outlier,
         "maximums": {
