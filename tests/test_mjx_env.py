@@ -22,8 +22,10 @@ from mujoco_truss_gen import (
     get_mujoco_spec,
 )
 from mujoco_truss_gen.mjx_env import (
+    _DEFAULT_WARP_NACONMAX,
     _configure_integrator_for_backend,
     _copy_model_source_for_env,
+    _warp_contact_capacity,
 )
 
 
@@ -189,6 +191,22 @@ def test_mjx_implementation_defaults_to_jax_and_reports_no_warp_buffers() -> Non
         "constraint_capacity_reached": False,
         "overflow": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("implementation", "configured", "expected"),
+    (
+        ("jax", None, None),
+        ("warp", None, _DEFAULT_WARP_NACONMAX),
+        ("warp", 12_345, 12_345),
+    ),
+)
+def test_warp_contact_capacity_avoids_single_world_default(
+    implementation: str,
+    configured: int | None,
+    expected: int | None,
+) -> None:
+    assert _warp_contact_capacity(implementation, configured) == expected
 
 
 @pytest.mark.parametrize(
@@ -579,6 +597,32 @@ def test_warp_graph_modes_step_and_selectively_reset(graph_mode: str) -> None:
     diagnostics = env.buffer_diagnostics(stepped_state)
     assert diagnostics["contact_capacity"] == 128 * batch_size
     assert diagnostics["constraint_capacity"] == 256
+    assert diagnostics["overflow"] is False
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not CUDA_WARP_AVAILABLE, reason="CUDA Warp dependencies are unavailable")
+def test_warp_default_contact_capacity_reaches_runtime_buffer() -> None:
+    batch_size = 2
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            max_steps=2,
+            nsubsteps=1,
+            speed=0.01,
+        ),
+        mjx_impl="warp",
+        warp_graph_mode="warp_staged",
+    )
+    reset = jax.jit(env.reset)
+    step = jax.jit(env.step)
+    _, state = reset(_keys(105, batch_size=batch_size))
+    actions = jnp.zeros((batch_size, env.action_size), dtype=jnp.float32)
+    _, state, _, _, _ = step(_keys(106, batch_size=batch_size), state, actions)
+
+    diagnostics = env.buffer_diagnostics(state)
+    assert env.warp_naconmax == _DEFAULT_WARP_NACONMAX
+    assert diagnostics["contact_capacity"] == _DEFAULT_WARP_NACONMAX
     assert diagnostics["overflow"] is False
 
 

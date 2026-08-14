@@ -22,6 +22,15 @@ WarpGraphMode = Literal["warp", "warp_staged", "warp_staged_ex"]
 
 _MJX_IMPLEMENTATIONS = frozenset(("jax", "warp"))
 _WARP_GRAPH_MODES = frozenset(("warp", "warp_staged", "warp_staged_ex"))
+_DEFAULT_WARP_NACONMAX = 32_768
+
+
+def _warp_contact_capacity(implementation: str, configured: int | None) -> int | None:
+    """Avoid Warp's single-world contact default in batched environments."""
+
+    if implementation == "warp" and configured is None:
+        return _DEFAULT_WARP_NACONMAX
+    return configured
 
 
 def _copy_model_source_for_env(model_source: ModelSource) -> ModelSource:
@@ -106,7 +115,8 @@ class MjxNodeVelocityEnv:
     ) -> None:
         self.mjx_impl = str(mjx_impl).lower()
         self.warp_graph_mode = str(warp_graph_mode).lower()
-        self.warp_naconmax = self._validate_optional_capacity(warp_naconmax, "warp_naconmax")
+        configured_naconmax = self._validate_optional_capacity(warp_naconmax, "warp_naconmax")
+        self.warp_naconmax = _warp_contact_capacity(self.mjx_impl, configured_naconmax)
         self.warp_njmax = self._validate_optional_capacity(warp_njmax, "warp_njmax")
         self._validate_implementation_config()
 
