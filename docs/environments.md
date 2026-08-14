@@ -319,6 +319,13 @@ env = MjxNodeVelocityEnv(
 )
 ```
 
+When `warp_naconmax` is omitted, the adapter allocates a conservative shared
+contact capacity of 32,768. This avoids MuJoCo-Warp's single-world default,
+which does not scale when MJX later batches the data across many environments
+and can truncate broadphase contacts while continuing execution. Explicit
+values still override the default; use `buffer_diagnostics(state)` to validate
+workload-specific capacity.
+
 Install it with `python -m pip install "mujoco-truss-gen[warp]"`. Warp requires
 the active JAX default device to be an NVIDIA CUDA GPU; construction fails with
 an actionable error when CUDA or the optional dependency is unavailable.
