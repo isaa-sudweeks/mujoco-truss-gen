@@ -598,15 +598,19 @@ class MujocoModel:
             return 0.0
 
         if self.wcrm:
-            norm = np.linalg.trace(rigidity_matrix.T @ rigidity_matrix)
+            norm = np.sum(np.square(rigidity_matrix))
         else:
             norm = 1.0
-        eigvals = np.linalg.eigvalsh(rigidity_matrix.T @ rigidity_matrix)
-        eigvals = np.sort(np.real(eigvals))
         rigid_body_modes = dims + (dims * (dims - 1)) // 2
-        if eigvals.size <= rigid_body_modes:
+        rigidity_rank = rigidity_matrix.shape[1] - rigid_body_modes
+        if rigidity_matrix.shape[0] < rigidity_rank:
             return 0.0
-        return float(max(eigvals[rigid_body_modes] / norm, 0.0))
+        self_stress_modes = rigidity_matrix.shape[0] - rigidity_rank
+        eigvals = np.linalg.eigvalsh(rigidity_matrix @ rigidity_matrix.T)
+        eigvals = np.sort(np.real(eigvals))
+        if eigvals.size <= self_stress_modes:
+            return 0.0
+        return float(max(eigvals[self_stress_modes] / norm, 0.0))
 
     def collapse_check(self) -> float:
         return self._critical_eig() / self.initial_critical_eig

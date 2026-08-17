@@ -112,6 +112,79 @@ def test_generated_spec_runs_in_all_builtin_envs() -> None:
             env.close()
 
 
+@pytest.mark.parametrize(
+    "env_cls",
+    (
+        MujocoTrussEnv,
+        MujocoRelativeObsEnv,
+        MujocoVelocityCommandEnv,
+        MujocoNodeVelocityCommandEnv,
+    ),
+)
+@pytest.mark.parametrize("invalid_critical_eig", (0.01, np.nan))
+def test_native_env_stops_at_first_collapsed_physics_substep(
+    env_cls, invalid_critical_eig: float
+) -> None:
+    env = env_cls(
+        TrussEnvConfig(
+            get_mujoco_spec("octahedron", realistic=False),
+            max_steps=3,
+            nsubsteps=5,
+            speed=0.01,
+            critical_eig_threshold=0.03,
+        )
+    )
+    try:
+        env.reset(seed=123)
+        critical_eig_values = iter((1.0, invalid_critical_eig))
+        latest_critical_eig = 1.0
+
+        def collapse_check() -> float:
+            nonlocal latest_critical_eig
+            latest_critical_eig = next(critical_eig_values, latest_critical_eig)
+            return latest_critical_eig
+
+        env.mj_model.collapse_check = collapse_check
+        initial_time = float(env.mj_model.data.time)
+        timestep = float(env.mj_model.model.opt.timestep)
+
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        _, _, terminated, truncated, info = env.step(action)
+
+        assert terminated
+        assert not truncated
+        assert info["terminated_by_collapse"]
+        assert info["terminated_during_substeps"]
+        assert info["substeps_executed"] == 2
+        minimum_critical_eig = float(info["minimum_substep_critical_eig_raw"])
+        if np.isfinite(invalid_critical_eig):
+            assert minimum_critical_eig == pytest.approx(invalid_critical_eig)
+        else:
+            assert not np.isfinite(minimum_critical_eig)
+        assert float(env.mj_model.data.time) == pytest.approx(initial_time + 2 * timestep)
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
+    "preset_name", ("icosahedron", "usevitch_210272254_p1", "henneberg_n6_2tube_1")
+)
+@pytest.mark.parametrize("wcrm", (False, True))
+def test_edge_gram_critical_eig_matches_column_gram_definition(
+    preset_name: str, wcrm: bool
+) -> None:
+    model = MujocoModel(get_mujoco_spec(preset_name, realistic=False))
+    rigidity, dims = model._rigidity_matrix_data()
+    rigid_body_modes = dims + (dims * (dims - 1)) // 2
+    eigvals = np.linalg.eigvalsh(rigidity.T @ rigidity)
+    norm = np.trace(rigidity.T @ rigidity) if wcrm else 1.0
+    expected = max(float(eigvals[rigid_body_modes] / norm), 0.0)
+
+    model.set_wcrm(wcrm)
+
+    assert model._critical_eig() == pytest.approx(expected, rel=1e-8, abs=1e-10)
+
+
 def test_builtin_presets_compile() -> None:
     assert {"octahedron", "icosahedron", "tetrahedron"} <= set(PRESETS)
 

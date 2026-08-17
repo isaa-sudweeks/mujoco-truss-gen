@@ -193,6 +193,11 @@ component. MJX samples the three values independently for each batch element;
 - `terminated` becomes true when the normalized rigidity metric falls below
   `critical_eig_threshold`.
 - `info` includes reward components and `critical_eig`.
+- Native MuJoCo and MJX environments evaluate rigidity after every physics
+  substep and stop advancing the current action at the first collapsed or
+  nonfinite state. This applies to both the JAX and Warp MJX implementations.
+  Their `info` also includes `minimum_substep_critical_eig_raw`,
+  `substeps_executed`, and `terminated_during_substeps`.
 
 ## Actions
 

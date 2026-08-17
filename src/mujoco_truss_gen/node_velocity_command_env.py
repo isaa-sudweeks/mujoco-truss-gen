@@ -85,7 +85,12 @@ class MujocoNodeVelocityCommandEnv(MujocoRelativeObsEnv):
         )
 
         previous_com = self._center_of_mass()
-        self._advance(edge_ctrl)
-        reward, info, terminated = self._compute_reward(action, previous_com)
+        advance_info = self._advance(edge_ctrl)
+        reward, info, terminated = self._compute_reward(
+            action,
+            previous_com,
+            substeps_executed=int(advance_info["substeps_executed"]),
+        )
+        info.update(advance_info)
         truncated = self.steps >= self.max_steps
         return self._get_obs(), reward, terminated, truncated, info

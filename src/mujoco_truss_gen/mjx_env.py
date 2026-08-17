@@ -772,11 +772,57 @@ class MjxNodeVelocityEnv:
         ctrl = state.data.ctrl.at[self._actuator_ids].set(edge_commands)
         data = state.data.replace(ctrl=ctrl)
 
-        def physics_substep(_index: int, loop_data: mjx.Data) -> mjx.Data:
-            loop_data = self._angle_bisector_controller.update(loop_data)
-            return mjx.step(model, loop_data)
+        initial_advance_state = (
+            data,
+            jnp.asarray(jnp.inf, dtype=data.qpos.dtype),
+            jnp.asarray(False),
+            jnp.asarray(0, dtype=jnp.int32),
+            jnp.asarray(jnp.nan, dtype=data.qpos.dtype),
+        )
 
-        data = jax.lax.fori_loop(0, int(self.config.nsubsteps), physics_substep, data)
+        def physics_substep(
+            _index: int,
+            loop_state: tuple[mjx.Data, jax.Array, jax.Array, jax.Array, jax.Array],
+        ) -> tuple[mjx.Data, jax.Array, jax.Array, jax.Array, jax.Array]:
+            def advance(
+                active_state: tuple[mjx.Data, jax.Array, jax.Array, jax.Array, jax.Array],
+            ) -> tuple[mjx.Data, jax.Array, jax.Array, jax.Array, jax.Array]:
+                loop_data, minimum_critical_eig, _, substeps_executed, _ = active_state
+                loop_data = self._angle_bisector_controller.update(loop_data)
+                loop_data = mjx.step(model, loop_data)
+                critical_eig = self._critical_eig(loop_data)
+                finite = jnp.isfinite(critical_eig)
+                minimum_critical_eig = jnp.where(
+                    finite,
+                    jnp.minimum(minimum_critical_eig, critical_eig),
+                    critical_eig,
+                )
+                terminated = jnp.logical_or(
+                    jnp.logical_not(finite),
+                    critical_eig < float(self.config.critical_eig_threshold),
+                )
+                return (
+                    loop_data,
+                    minimum_critical_eig,
+                    terminated,
+                    substeps_executed + jnp.asarray(1, dtype=substeps_executed.dtype),
+                    critical_eig,
+                )
+
+            return jax.lax.cond(loop_state[2], lambda state: state, advance, loop_state)
+
+        (
+            data,
+            minimum_substep_critical_eig_raw,
+            terminated_during_substeps,
+            substeps_executed,
+            final_critical_eig_raw,
+        ) = jax.lax.fori_loop(
+            0,
+            int(self.config.nsubsteps),
+            physics_substep,
+            initial_advance_state,
+        )
 
         step_count = state.step_count + jnp.asarray(1, dtype=state.step_count.dtype)
         next_state = MjxEnvState(
@@ -785,10 +831,19 @@ class MjxNodeVelocityEnv:
             node_commands=node_commands,
             domain_randomization=state.domain_randomization,
         )
-        reward, info, terminated = self._compute_reward(data, action, previous_com)
+        reward, info, terminated = self._compute_reward(
+            data,
+            action,
+            previous_com,
+            critical_eig_raw=final_critical_eig_raw,
+            substeps_executed=substeps_executed,
+        )
         truncated = step_count >= int(self.config.max_steps)
         done = jnp.logical_or(terminated, truncated)
         info = dict(info)
+        info["minimum_substep_critical_eig_raw"] = minimum_substep_critical_eig_raw
+        info["substeps_executed"] = substeps_executed
+        info["terminated_during_substeps"] = terminated_during_substeps
         info["terminated"] = terminated
         info["truncated"] = truncated
         return self._get_obs_one(data, node_commands), next_state, reward, done, info
@@ -1225,8 +1280,11 @@ class MjxNodeVelocityEnv:
         data: mjx.Data,
         action: jax.Array,
         previous_com: jax.Array,
+        critical_eig_raw: jax.Array | None = None,
+        substeps_executed: jax.Array | None = None,
     ) -> tuple[jax.Array, MjxInfo, jax.Array]:
-        critical_eig_raw = self._critical_eig(data)
+        if critical_eig_raw is None:
+            critical_eig_raw = self._critical_eig(data)
         terminated = jnp.logical_or(
             jnp.logical_not(jnp.isfinite(critical_eig_raw)),
             critical_eig_raw < float(self.config.critical_eig_threshold),
@@ -1235,7 +1293,10 @@ class MjxNodeVelocityEnv:
 
         current_com = self._center_of_mass(data)
         com_delta_x = current_com[0] - previous_com[0]
-        dt = float(self.config.nsubsteps) * float(self.mujoco_model.model.opt.timestep)
+        elapsed_substeps = (
+            jnp.asarray(self.config.nsubsteps) if substeps_executed is None else substeps_executed
+        )
+        dt = elapsed_substeps * float(self.mujoco_model.model.opt.timestep)
         raw_forward_vel = jnp.where(dt > 0.0, com_delta_x / dt, 0.0)
         reward_forward_vel = jnp.where(jnp.isfinite(raw_forward_vel), raw_forward_vel, 0.0)
         normalized_forward_vel_raw = reward_forward_vel / self._position_scale
@@ -1325,8 +1386,12 @@ class MjxNodeVelocityEnv:
         rigidity = jnp.zeros((edge_count, matrix_width), dtype=positions.dtype)
         rigidity = rigidity.at[rows, columns_a].set(-directions)
         rigidity = rigidity.at[rows, columns_b].set(directions)
-        eigvals = jnp.linalg.eigvalsh(rigidity.T @ rigidity)
-        raw = jnp.maximum(eigvals[rigid_body_modes], 0.0)
+        rigidity_rank = matrix_width - rigid_body_modes
+        if edge_count < rigidity_rank:
+            return jnp.asarray(0.0)
+        self_stress_modes = edge_count - rigidity_rank
+        eigvals = jnp.linalg.eigvalsh(rigidity @ rigidity.T)
+        raw = jnp.maximum(eigvals[self_stress_modes], 0.0)
         return raw / self._initial_critical_eig
 
     def _slip_penalty(self, data: mjx.Data) -> jax.Array:

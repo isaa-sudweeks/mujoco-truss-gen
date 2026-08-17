@@ -432,21 +432,44 @@ class MujocoTrussEnv(gym.Env):
         action = np.asarray(action, dtype=np.float32)
         action = np.clip(action, self.action_space.low, self.action_space.high)
         previous_com = self._center_of_mass()
-        self._advance(action)
-        reward, info, terminated = self._compute_reward(action, previous_com)
+        advance_info = self._advance(action)
+        reward, info, terminated = self._compute_reward(
+            action,
+            previous_com,
+            substeps_executed=int(advance_info["substeps_executed"]),
+        )
+        info.update(advance_info)
         truncated = self.steps >= self.max_steps
         return self._get_obs(), reward, terminated, truncated, info
 
-    def _advance(self, ctrl: np.ndarray) -> None:
+    def _advance(self, ctrl: np.ndarray) -> dict[str, float | int | bool]:
         self.mj_model.set_external_ctrl(self._apply_control_noise(ctrl))
 
-        for _ in range(self.nsubsteps):
+        minimum_critical_eig = np.inf
+        terminated_during_substeps = False
+        substeps_executed = 0
+        for substep_index in range(self.nsubsteps):
             self.mj_model.apply_angle_bisector_control()
             mujoco.mj_step(self.mj_model.model, self.mj_model.data)
+            substeps_executed = substep_index + 1
             if self.viewer is not None:
                 self.viewer.sync()
 
+            critical_eig = float(self.mj_model.collapse_check())
+            if np.isfinite(critical_eig):
+                minimum_critical_eig = min(minimum_critical_eig, critical_eig)
+            else:
+                minimum_critical_eig = critical_eig
+            if not np.isfinite(critical_eig) or critical_eig < self.config.critical_eig_threshold:
+                terminated_during_substeps = True
+                break
+
         self.steps += 1
+        return {
+            "minimum_substep_critical_eig_raw": float(minimum_critical_eig),
+            "substeps_executed": substeps_executed,
+            "terminated_during_substeps": terminated_during_substeps,
+        }
 
     def _apply_control_noise(self, ctrl: np.ndarray) -> np.ndarray:
         ctrl = np.asarray(ctrl, dtype=np.float32)
@@ -516,6 +539,7 @@ class MujocoTrussEnv(gym.Env):
         self,
         action: np.ndarray,
         previous_com: np.ndarray | None = None,
+        substeps_executed: int | None = None,
     ) -> tuple[float, dict[str, float | bool], bool]:
         critical_eig_raw = float(self.mj_model.collapse_check())
         terminated = (
@@ -530,7 +554,8 @@ class MujocoTrussEnv(gym.Env):
         else:
             current_com = self._center_of_mass()
             com_delta_x = float(current_com[0] - previous_com[0])
-            dt = float(self.nsubsteps) * float(self.mj_model.model.opt.timestep)
+            elapsed_substeps = self.nsubsteps if substeps_executed is None else substeps_executed
+            dt = float(elapsed_substeps) * float(self.mj_model.model.opt.timestep)
             raw_forward_vel = 0.0 if dt <= 0.0 else com_delta_x / dt
 
         reward_forward_vel = float(raw_forward_vel) if np.isfinite(raw_forward_vel) else 0.0

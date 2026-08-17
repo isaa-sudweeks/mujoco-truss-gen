@@ -106,6 +106,23 @@ def test_mjx_node_velocity_env_constructs_for_canonical_abstract_presets(
     assert env.action_high.shape == (env.action_size,)
 
 
+@pytest.mark.parametrize(
+    "preset_name",
+    (
+        "tetrahedron",
+        "octahedron",
+        "icosahedron",
+        "usevitch_210272254_p1",
+        "henneberg_n6_2tube_1",
+        "henneberg_n8_2tube_187",
+    ),
+)
+def test_mjx_edge_gram_rigidity_matches_native_initial_value(preset_name: str) -> None:
+    env = MjxNodeVelocityEnv(get_mujoco_spec(preset_name, realistic=False))
+
+    assert float(env._critical_eig(env._data_template)) == pytest.approx(1.0, rel=2e-4)
+
+
 def test_mjx_node_velocity_env_constructs_with_sparse_mass_matrix() -> None:
     env = MjxNodeVelocityEnv(get_mujoco_spec("octahedron", realistic=True))
 
@@ -312,20 +329,95 @@ def test_mjx_jitted_step_matches_node_action_and_episode_semantics(
         "forward_velocity_normalized",
         "forward_velocity_normalized_raw",
         "forward_velocity_raw",
+        "minimum_substep_critical_eig_raw",
         "rigidity",
         "slip",
+        "substeps_executed",
         "terminated",
         "terminated_by_collapse",
+        "terminated_during_substeps",
         "truncated",
     }
     assert set(info) == expected_info_keys
     assert all(value.shape == (2,) for value in info.values())
+    np.testing.assert_array_equal(info["substeps_executed"], np.ones(2, dtype=np.int32))
+    assert not np.any(np.asarray(info["terminated_during_substeps"]))
 
     _, state, _, done, info = compiled_env.step(_keys(4), state, actions)
     np.testing.assert_array_equal(state.step_count, np.full(2, 2, dtype=np.int32))
     assert np.all(np.asarray(done))
     assert not np.any(np.asarray(info["terminated"]))
     assert np.all(np.asarray(info["truncated"]))
+
+
+def test_mjx_stops_after_first_collapsed_physics_substep() -> None:
+    nsubsteps = 5
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            max_steps=3,
+            nsubsteps=nsubsteps,
+            speed=0.01,
+            critical_eig_threshold=2.0,
+        )
+    )
+    reset = jax.jit(env.reset)
+    step = jax.jit(env.step)
+    keys = _keys(30, batch_size=2)
+    _, state = reset(keys)
+    initial_time = np.asarray(state.data.time)
+    timestep = float(env.mujoco_model.model.opt.timestep)
+    actions = jnp.zeros((2, env.action_size), dtype=jnp.float32)
+
+    _, next_state, _, done, info = step(keys, state, actions)
+
+    assert np.all(np.asarray(done))
+    assert np.all(np.asarray(info["terminated_by_collapse"]))
+    assert np.all(np.asarray(info["terminated_during_substeps"]))
+    np.testing.assert_array_equal(info["substeps_executed"], np.ones(2, dtype=np.int32))
+    np.testing.assert_allclose(next_state.data.time, initial_time + timestep)
+    np.testing.assert_allclose(
+        info["minimum_substep_critical_eig_raw"],
+        info["critical_eig_raw"],
+    )
+
+
+def test_mjx_substep_guard_freezes_only_collapsed_batch_elements() -> None:
+    nsubsteps = 5
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            max_steps=3,
+            nsubsteps=nsubsteps,
+            speed=0.01,
+            critical_eig_threshold=0.5,
+        )
+    )
+    first_actuator_id = int(env._actuator_ids[0])
+
+    def command_dependent_critical_eig(data) -> jax.Array:
+        commanded = jnp.abs(data.ctrl[first_actuator_id]) > 1e-8
+        return jnp.where(commanded, 0.0, 1.0)
+
+    env._critical_eig = command_dependent_critical_eig
+    reset = jax.jit(env.reset)
+    step = jax.jit(env.step)
+    keys = _keys(31, batch_size=2)
+    _, state = reset(keys)
+    initial_time = np.asarray(state.data.time)
+    timestep = float(env.mujoco_model.model.opt.timestep)
+    action_direction = np.sign(np.asarray(env._incidence_matrix[0])) * float(env.config.speed)
+    actions = jnp.asarray(np.stack((action_direction, np.zeros(env.action_size))))
+
+    _, next_state, _, done, info = step(keys, state, actions)
+
+    np.testing.assert_array_equal(done, np.array([True, False]))
+    np.testing.assert_array_equal(info["substeps_executed"], np.array([1, nsubsteps]))
+    np.testing.assert_array_equal(info["terminated_during_substeps"], np.array([True, False]))
+    np.testing.assert_allclose(
+        next_state.data.time,
+        initial_time + timestep * np.array([1, nsubsteps]),
+    )
 
 
 def test_mjx_observation_and_reward_match_cpu_environment(
@@ -554,6 +646,7 @@ def test_warp_graph_modes_step_and_selectively_reset(graph_mode: str) -> None:
             get_mujoco_spec("tetrahedron", realistic=False),
             max_steps=4,
             nsubsteps=2,
+            critical_eig_threshold=2.0,
         ),
         mjx_impl="warp",
         warp_graph_mode=graph_mode,
@@ -594,6 +687,8 @@ def test_warp_graph_modes_step_and_selectively_reset(graph_mode: str) -> None:
     assert bool(jnp.all(jnp.isfinite(reward)))
     assert done.shape == (batch_size,)
     assert info["terminated"].shape == (batch_size,)
+    assert bool(jnp.all(info["terminated_during_substeps"]))
+    np.testing.assert_array_equal(info["substeps_executed"], np.ones(batch_size, dtype=np.int32))
     diagnostics = env.buffer_diagnostics(stepped_state)
     assert diagnostics["contact_capacity"] == 128 * batch_size
     assert diagnostics["constraint_capacity"] == 256
