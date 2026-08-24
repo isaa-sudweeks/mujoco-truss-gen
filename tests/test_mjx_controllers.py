@@ -81,6 +81,18 @@ def test_mjx_angle_bisector_degenerate_target_retains_previous_control() -> None
     )
 
 
+def test_mjx_angle_bisector_batch_update_matches_vmap() -> None:
+    model = MujocoModel(get_mujoco_spec("tetrahedron", realistic=True))
+    controller = MjxAngleBisectorController(model.angle_bisector_controller.targets)
+    data = mjx.put_data(model.model, model.data)
+    batched_data = jax.vmap(lambda _index: data)(jnp.arange(2))
+
+    actual = jax.jit(controller.update_batch)(batched_data)
+    expected = jax.jit(jax.vmap(controller.update))(batched_data)
+
+    np.testing.assert_allclose(actual.ctrl, expected.ctrl, rtol=1e-6, atol=1e-6)
+
+
 @pytest.mark.parametrize(
     ("angle", "reference"),
     ((-3.0, 3.0), (3.0, -3.0), (0.2, 8.0), (-0.2, -8.0)),

@@ -638,6 +638,35 @@ def test_mjx_reset_where_only_resets_masked_elements(
 
 @pytest.mark.cuda
 @pytest.mark.skipif(not CUDA_WARP_AVAILABLE, reason="CUDA Warp dependencies are unavailable")
+def test_warp_public_step_is_batch_native() -> None:
+    batch_size = 2
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            max_steps=2,
+            nsubsteps=1,
+            speed=0.01,
+        ),
+        mjx_impl="warp",
+        warp_naconmax=128 * batch_size,
+        warp_njmax=256,
+    )
+    keys = _keys(90, batch_size=batch_size)
+    _, state = jax.jit(env.reset)(keys)
+    actions = jnp.zeros((batch_size, env.action_size), dtype=jnp.float32)
+
+    obs, state, reward, done, info = jax.jit(env.step)(keys, state, actions)
+
+    assert obs.shape == (batch_size, env.observation_size)
+    assert state.step_count.shape == (batch_size,)
+    assert reward.shape == done.shape == (batch_size,)
+    assert info["substeps_executed"].shape == (batch_size,)
+    assert bool(jnp.all(jnp.isfinite(obs)))
+    assert bool(jnp.all(jnp.isfinite(reward)))
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not CUDA_WARP_AVAILABLE, reason="CUDA Warp dependencies are unavailable")
 @pytest.mark.parametrize("graph_mode", ("warp", "warp_staged", "warp_staged_ex"))
 def test_warp_graph_modes_step_and_selectively_reset(graph_mode: str) -> None:
     batch_size = 2

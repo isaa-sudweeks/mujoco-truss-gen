@@ -596,6 +596,8 @@ class MjxNodeVelocityEnv:
 
         batch_size = self._key_batch_size(keys)
         self._validate_state_and_action_shapes(state, actions, batch_size)
+        if self.mjx_impl == "warp":
+            return self._step_warp_batch(keys, state, actions)
         return jax.vmap(self._step_one)(keys, state, actions)
 
     def reset_where(
@@ -847,6 +849,149 @@ class MjxNodeVelocityEnv:
         info["terminated"] = terminated
         info["truncated"] = truncated
         return self._get_obs_one(data, node_commands), next_state, reward, done, info
+
+    def _step_warp_batch(
+        self,
+        keys: jax.Array,
+        state: MjxEnvState,
+        actions: jax.Array,
+    ) -> tuple[jax.Array, MjxEnvState, jax.Array, jax.Array, MjxInfo]:
+        """Advance a leading world dimension without nesting ``vmap`` around Warp."""
+
+        actions = jnp.clip(actions, self.action_low, self.action_high)
+        model = self._warp_model_for_domain_batch(state.domain_randomization)
+        previous_com = jax.vmap(self._center_of_mass)(state.data)
+
+        node_commands = jnp.where(self._passive_node_mask[None, :], 0.0, actions)
+        edge_commands = node_commands @ self._incidence_matrix.T
+        edge_commands = jnp.clip(edge_commands, self._ctrl_low, self._ctrl_high)
+        edge_commands = jax.vmap(self._apply_control_noise)(keys, edge_commands)
+
+        ctrl = state.data.ctrl.at[:, self._actuator_ids].set(edge_commands)
+        data = state.data.replace(ctrl=ctrl)
+        batch_size = actions.shape[0]
+        initial_advance_state = (
+            data,
+            jnp.full((batch_size,), jnp.inf, dtype=data.qpos.dtype),
+            jnp.zeros((batch_size,), dtype=jnp.bool_),
+            jnp.zeros((batch_size,), dtype=jnp.int32),
+            jnp.full((batch_size,), jnp.nan, dtype=data.qpos.dtype),
+        )
+
+        def physics_substep(
+            _index: int,
+            loop_state: tuple[mjx.Data, jax.Array, jax.Array, jax.Array, jax.Array],
+        ) -> tuple[mjx.Data, jax.Array, jax.Array, jax.Array, jax.Array]:
+            (
+                loop_data,
+                minimum_critical_eig,
+                terminated,
+                substeps_executed,
+                final_critical_eig,
+            ) = loop_state
+            active = jnp.logical_not(terminated)
+            advanced_data = self._angle_bisector_controller.update_batch(loop_data)
+            advanced_data = mjx.step(model, advanced_data)
+            critical_eig = jax.vmap(self._critical_eig)(advanced_data)
+            finite = jnp.isfinite(critical_eig)
+            newly_terminated = jnp.logical_or(
+                jnp.logical_not(finite),
+                critical_eig < float(self.config.critical_eig_threshold),
+            )
+
+            loop_data = self._data_where(terminated, advanced_data, loop_data)
+            updated_minimum = jnp.where(
+                finite,
+                jnp.minimum(minimum_critical_eig, critical_eig),
+                critical_eig,
+            )
+            minimum_critical_eig = jnp.where(
+                active,
+                updated_minimum,
+                minimum_critical_eig,
+            )
+            final_critical_eig = jnp.where(active, critical_eig, final_critical_eig)
+            substeps_executed = substeps_executed + active.astype(substeps_executed.dtype)
+            terminated = jnp.logical_or(terminated, jnp.logical_and(active, newly_terminated))
+            return (
+                loop_data,
+                minimum_critical_eig,
+                terminated,
+                substeps_executed,
+                final_critical_eig,
+            )
+
+        (
+            data,
+            minimum_substep_critical_eig_raw,
+            terminated_during_substeps,
+            substeps_executed,
+            final_critical_eig_raw,
+        ) = jax.lax.fori_loop(
+            0,
+            int(self.config.nsubsteps),
+            physics_substep,
+            initial_advance_state,
+        )
+
+        step_count = state.step_count + jnp.asarray(1, dtype=state.step_count.dtype)
+        next_state = MjxEnvState(
+            data=data,
+            step_count=step_count,
+            node_commands=node_commands,
+            domain_randomization=state.domain_randomization,
+        )
+        reward, info, terminated = jax.vmap(
+            lambda world_data, action, world_previous_com, critical_eig, executed: (
+                self._compute_reward(
+                    world_data,
+                    action,
+                    world_previous_com,
+                    critical_eig_raw=critical_eig,
+                    substeps_executed=executed,
+                )
+            )
+        )(
+            data,
+            actions,
+            previous_com,
+            final_critical_eig_raw,
+            substeps_executed,
+        )
+        truncated = step_count >= int(self.config.max_steps)
+        done = jnp.logical_or(terminated, truncated)
+        info = dict(info)
+        info["minimum_substep_critical_eig_raw"] = minimum_substep_critical_eig_raw
+        info["substeps_executed"] = substeps_executed
+        info["terminated_during_substeps"] = terminated_during_substeps
+        info["terminated"] = terminated
+        info["truncated"] = truncated
+        return self._get_obs(next_state), next_state, reward, done, info
+
+    def _warp_model_for_domain_batch(
+        self,
+        domain_randomization: MjxDomainRandomizationState,
+    ) -> mjx.Model:
+        """Batch only the model fields that MJX-Warp defines per world."""
+
+        from mujoco.mjx.warp import types as warp_types  # type: ignore[import-untyped]
+
+        vmapped_model = jax.vmap(self._model_for_domain)(domain_randomization)
+
+        def select_leaf(
+            path: jax.tree_util.KeyPath,
+            vmapped_value: jax.Array,
+            nominal_value: jax.Array,
+        ) -> jax.Array:
+            field_name = self._tree_path_to_warp_field(path)
+            is_batched = warp_types._BATCH_DIM["Model"].get(field_name, True)
+            return vmapped_value if is_batched else nominal_value
+
+        return jax.tree_util.tree_map_with_path(
+            select_leaf,
+            vmapped_model,
+            self.mjx_model,
+        )
 
     def _sample_domain_randomization(self, key: jax.Array) -> MjxDomainRandomizationState:
         keys = jax.random.split(key, 19)
