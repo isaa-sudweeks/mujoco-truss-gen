@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import cast
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from mujoco import mjx  # type: ignore[import-untyped]
@@ -123,14 +124,44 @@ class MjxAngleBisectorController:
 
         return self._apply(data, use_previous=True)
 
+    def update_batch(self, data: mjx.Data) -> mjx.Data:
+        """Update controls for data that already has a leading world dimension."""
+
+        if not self.enabled:
+            return data
+        ctrl = jax.vmap(
+            lambda world_ctrl, world_site_xpos, world_xmat: self._compute_controls(
+                world_ctrl,
+                world_site_xpos,
+                world_xmat,
+                use_previous=True,
+            )
+        )(data.ctrl, data.site_xpos, data.xmat)
+        return data.replace(ctrl=ctrl)
+
     def _apply(self, data: mjx.Data, *, use_previous: bool) -> mjx.Data:
         if not self.enabled:
             return data
 
-        ctrl = data.ctrl
-        node_positions = data.site_xpos[self._node_site_ids]
-        fixed_neighbor_positions = data.site_xpos[self._neighbor_site_ids]
-        candidate_positions = data.site_xpos[self._candidate_site_ids]
+        ctrl = self._compute_controls(
+            data.ctrl,
+            data.site_xpos,
+            data.xmat,
+            use_previous=use_previous,
+        )
+        return data.replace(ctrl=ctrl)
+
+    def _compute_controls(
+        self,
+        ctrl: jnp.ndarray,
+        site_xpos: jnp.ndarray,
+        xmat: jnp.ndarray,
+        *,
+        use_previous: bool,
+    ) -> jnp.ndarray:
+        node_positions = site_xpos[self._node_site_ids]
+        fixed_neighbor_positions = site_xpos[self._neighbor_site_ids]
+        candidate_positions = site_xpos[self._candidate_site_ids]
         candidate_distances = jnp.linalg.norm(
             candidate_positions - node_positions[:, None, :], axis=-1
         )
@@ -161,7 +192,7 @@ class MjxAngleBisectorController:
             ~has_one_neighbor & direction_a_valid & direction_b_valid & plane_normal_valid
         )
 
-        parent_xmat = data.xmat[self._parent_body_ids].reshape((-1, 3, 3))
+        parent_xmat = xmat[self._parent_body_ids].reshape((-1, 3, 3))
         target_parent = jnp.einsum("tji,tj->ti", parent_xmat, target_world)
         angles, angle_valid = _signed_angle_about_axis(
             self._initial_rod_vectors,
@@ -175,7 +206,7 @@ class MjxAngleBisectorController:
         ctrl = ctrl.at[self._actuator_ids].set(angles)
 
         if self._angular_target_indices.size == 0:
-            return data.replace(ctrl=ctrl)
+            return ctrl
 
         angular_indices = self._angular_target_indices
         angular_hinge_axes = self._angular_hinge_axes
@@ -208,7 +239,7 @@ class MjxAngleBisectorController:
         ctrl = ctrl.at[self._angular_actuator_ids].set(angular_angles)
 
         if self._roll_target_indices.size == 0:
-            return data.replace(ctrl=ctrl)
+            return ctrl
 
         angular_angle_by_target = jnp.zeros(self.target_count, dtype=angular_angles.dtype)
         angular_angle_by_target = angular_angle_by_target.at[angular_indices].set(angular_angles)
@@ -288,7 +319,7 @@ class MjxAngleBisectorController:
             ctrl[self._roll_actuator_ids],
         )
         ctrl = ctrl.at[self._roll_actuator_ids].set(roll_angles)
-        return data.replace(ctrl=ctrl)
+        return ctrl
 
 
 def _unit_vector(vector: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
