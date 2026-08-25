@@ -57,6 +57,22 @@ def _configure_integrator_for_backend(
         model.opt.integrator = mujoco.mjtIntegrator.mjINT_EULER
 
 
+def _rebuild_warp_shared_buffers_after_partial_step(
+    model: mjx.Model,
+    data: mjx.Data,
+    substeps_executed: jax.Array,
+    nsubsteps: int,
+) -> mjx.Data:
+    """Synchronize Warp's batch-shared buffers with selected world states."""
+
+    return jax.lax.cond(
+        jnp.any(substeps_executed < nsubsteps),
+        lambda selected_data: mjx.forward(model, selected_data),
+        lambda selected_data: selected_data,
+        data,
+    )
+
+
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True, slots=True)
 class MjxDomainRandomizationState:
@@ -932,6 +948,13 @@ class MjxNodeVelocityEnv:
             int(self.config.nsubsteps),
             physics_substep,
             initial_advance_state,
+        )
+        # Per-world restoration cannot restore Warp's batch-shared contact buffers.
+        data = _rebuild_warp_shared_buffers_after_partial_step(
+            model,
+            data,
+            substeps_executed,
+            int(self.config.nsubsteps),
         )
 
         step_count = state.step_count + jnp.asarray(1, dtype=state.step_count.dtype)

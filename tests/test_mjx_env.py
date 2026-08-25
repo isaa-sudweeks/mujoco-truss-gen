@@ -25,6 +25,7 @@ from mujoco_truss_gen.mjx_env import (
     _DEFAULT_WARP_NACONMAX,
     _configure_integrator_for_backend,
     _copy_model_source_for_env,
+    _rebuild_warp_shared_buffers_after_partial_step,
     _warp_contact_capacity,
 )
 
@@ -722,6 +723,23 @@ def test_warp_graph_modes_step_and_selectively_reset(graph_mode: str) -> None:
     assert diagnostics["contact_capacity"] == 128 * batch_size
     assert diagnostics["constraint_capacity"] == 256
     assert diagnostics["overflow"] is False
+
+
+def test_warp_shared_buffers_rebuilt_only_after_partial_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mjx, "forward", lambda _model, data: data + 1)
+    data = jnp.array([3.0])
+
+    unchanged = _rebuild_warp_shared_buffers_after_partial_step(
+        None, data, jnp.array([2, 2]), 2  # type: ignore[arg-type]
+    )
+    rebuilt = _rebuild_warp_shared_buffers_after_partial_step(
+        None, data, jnp.array([1, 2]), 2  # type: ignore[arg-type]
+    )
+
+    np.testing.assert_array_equal(unchanged, data)
+    np.testing.assert_array_equal(rebuilt, data + 1)
 
 
 @pytest.mark.cuda
