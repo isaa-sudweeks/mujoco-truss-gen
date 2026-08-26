@@ -132,6 +132,30 @@ values. Runtime randomization intentionally
 does not change actuator control ranges, force ranges, action-space bounds, or
 the reset `qpos`/`qvel` perturbation.
 
+For abstract models, `abstract_node_mass_multiplier_range` draws one strictly
+positive nominal-relative multiplier independently for every physical node:
+
+```python
+abstract_env = MujocoTrussEnv(
+    TrussEnvConfig(
+        get_mujoco_spec("octahedron", realistic=False),
+        domain_randomization=DomainRandomizationConfig(
+            body_mass_multiplier_range=(0.8, 1.2),
+            abstract_node_mass_multiplier_range=(0.7, 1.3),
+        ),
+    )
+)
+```
+
+The node order is `env.mj_model.node_names` (or
+`env.mujoco_model.node_names` for MJX). When both mass ranges are configured, a
+node's final mass is its nominal mass times the global multiplier times its node
+multiplier. Native resets report the ordered node-name-to-multiplier mapping at
+`info["domain_randomization"]["abstract_node_mass_multipliers"]`; MJX stores the
+vector at `state.domain_randomization.abstract_node_mass_multipliers`. The option
+is rejected for realistic models because their logical nodes are represented by
+multiple physical components.
+
 Use `model_factory` for changes that are baked into the compiled model, such as
 scale, node locations, topology, or `TrussPhysicalParameters` used while
 building the XML:
@@ -306,7 +330,9 @@ model per instance. Realistic angle-bisector controls are evaluated as batched
 JAX operations before every MJX physics substep. Runtime
 `DomainRandomizationConfig` ranges are sampled independently per batched
 environment on reset and remain fixed for that episode; the sampled values are
-available on `state.domain_randomization`. `model_factory`, other internal
+available on `state.domain_randomization`. Per-node mass multiplier vectors have
+shape `[batch_size, physical_node_count]`; `reset_where` resamples them only for
+masked batch elements. `model_factory`, other internal
 actuator types, rendering, and batches containing different model shapes are not
 supported. A different batch size can be used, but it causes JAX to compile a
 separate executable.
