@@ -827,6 +827,7 @@ def test_warp_domain_randomization_is_independent_and_finite() -> None:
             get_mujoco_spec("tetrahedron", realistic=False),
             domain_randomization=DomainRandomizationConfig(
                 body_mass_multiplier_range=(0.8, 1.2),
+                abstract_node_mass_multiplier_range=(0.7, 1.3),
                 body_inertia_multiplier_range=(0.8, 1.2),
                 actuator_gain_multiplier_range=(0.75, 1.25),
                 actuator_bias_multiplier_range=(0.75, 1.25),
@@ -845,6 +846,10 @@ def test_warp_domain_randomization_is_independent_and_finite() -> None:
     masses = np.asarray(state.domain_randomization.body_mass_multiplier)
     assert np.unique(masses).size > 1
     assert np.all((masses >= 0.8) & (masses <= 1.2))
+    node_masses = np.asarray(state.domain_randomization.abstract_node_mass_multipliers)
+    assert node_masses.shape == (batch_size, len(env.mujoco_model.node_names))
+    assert np.unique(node_masses).size > len(env.mujoco_model.node_names)
+    assert np.all((node_masses >= 0.7) & (node_masses <= 1.3))
     assert np.all(
         (np.asarray(state.domain_randomization.gravity_z) >= -10.5)
         & (np.asarray(state.domain_randomization.gravity_z) <= -8.8)
@@ -867,6 +872,7 @@ def test_mjx_domain_randomization_reset_is_deterministic_and_batched() -> None:
             get_mujoco_spec("tetrahedron", realistic=False),
             domain_randomization=DomainRandomizationConfig(
                 body_mass_multiplier_range=(0.5, 1.5),
+                abstract_node_mass_multiplier_range=(0.6, 1.4),
                 body_inertia_multiplier_range=(2.0, 2.0),
                 dof_armature_range=(0.02, 0.02),
                 dof_frictionloss_range=(0.03, 0.03),
@@ -897,6 +903,14 @@ def test_mjx_domain_randomization_reset_is_deterministic_and_batched() -> None:
     assert not np.array_equal(
         np.asarray(state_a.domain_randomization.body_mass_multiplier),
         np.asarray(state_c.domain_randomization.body_mass_multiplier),
+    )
+    node_masses = np.asarray(state_a.domain_randomization.abstract_node_mass_multipliers)
+    assert node_masses.shape == (4, len(env.mujoco_model.node_names))
+    assert np.all((node_masses >= 0.6) & (node_masses <= 1.4))
+    assert all(np.unique(row).size > 1 for row in node_masses)
+    assert not np.array_equal(
+        node_masses,
+        np.asarray(state_c.domain_randomization.abstract_node_mass_multipliers),
     )
     np.testing.assert_allclose(state_a.domain_randomization.body_inertia_multiplier, 2.0)
     np.testing.assert_allclose(state_a.domain_randomization.dof_armature, 0.02)
@@ -930,6 +944,7 @@ def test_mjx_domain_randomization_reset_where_only_resamples_masked_elements() -
             get_mujoco_spec("tetrahedron", realistic=False),
             domain_randomization=DomainRandomizationConfig(
                 body_mass_multiplier_range=(0.5, 1.5),
+                abstract_node_mass_multiplier_range=(0.6, 1.4),
                 gravity_z_range=(-11.0, -8.0),
             ),
         )
@@ -947,6 +962,14 @@ def test_mjx_domain_randomization_reset_where_only_resamples_masked_elements() -
     np.testing.assert_array_equal(
         merged.domain_randomization.body_mass_multiplier[1],
         state.domain_randomization.body_mass_multiplier[1],
+    )
+    assert not np.array_equal(
+        np.asarray(state.domain_randomization.abstract_node_mass_multipliers[0]),
+        np.asarray(merged.domain_randomization.abstract_node_mass_multipliers[0]),
+    )
+    np.testing.assert_array_equal(
+        merged.domain_randomization.abstract_node_mass_multipliers[1],
+        state.domain_randomization.abstract_node_mass_multipliers[1],
     )
     assert not np.array_equal(
         np.asarray(state.domain_randomization.gravity_z[2]),
@@ -1093,6 +1116,129 @@ def test_mjx_domain_randomization_model_patch_matches_cpu_setconst_for_abstract_
             err_msg=field,
         )
     np.testing.assert_allclose(actual.opt.gravity, expected.opt.gravity)
+
+
+def test_mjx_independent_node_mass_patch_matches_cpu_setconst() -> None:
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            domain_randomization=DomainRandomizationConfig(
+                body_mass_multiplier_range=(2.0, 2.0),
+                abstract_node_mass_multiplier_range=(0.5, 2.0),
+            ),
+        )
+    )
+    node_multipliers = np.asarray([0.5, 0.75, 1.25, 2.0])
+    domain = replace(
+        env._nominal_domain_randomization_state(),
+        body_mass_multiplier=jnp.asarray(2.0),
+        abstract_node_mass_multipliers=jnp.asarray(node_multipliers),
+    )
+    actual = env._model_for_domain(domain)
+
+    cpu_model = get_mujoco_spec("tetrahedron", realistic=False).compile()
+    cpu_data = mujoco.MjData(cpu_model)
+    cpu_model.body_mass[:] *= 2.0
+    for node_name, multiplier in zip(
+        env.mujoco_model.node_names, node_multipliers, strict=True
+    ):
+        cpu_model.body_mass[cpu_model.body(node_name).id] *= multiplier
+    mujoco.mj_setConst(cpu_model, cpu_data)
+    expected = mjx.put_model(cpu_model)
+
+    for field in (
+        "body_mass",
+        "body_subtreemass",
+        "body_invweight0",
+        "dof_invweight0",
+        "dof_M0",
+        "tendon_invweight0",
+        "actuator_acc0",
+    ):
+        np.testing.assert_allclose(
+            getattr(actual, field),
+            getattr(expected, field),
+            rtol=1e-6,
+            atol=1e-7,
+            err_msg=field,
+        )
+
+    reset = jax.jit(env.reset)
+    step = jax.jit(env.step)
+    obs, state = reset(_keys(38, batch_size=2))
+    obs, state, reward, _, _ = step(
+        _keys(39, batch_size=2),
+        state,
+        jnp.zeros((2, env.action_size), dtype=jnp.float32),
+    )
+    assert np.all(np.isfinite(np.asarray(obs)))
+    assert np.all(np.isfinite(np.asarray(state.data.qpos)))
+    assert np.all(np.isfinite(np.asarray(reward)))
+
+
+def test_mjx_independent_node_mass_preserves_nominal_dof_armature(tmp_path: Path) -> None:
+    root = ET.fromstring(get_mujoco_spec("tetrahedron", realistic=False).to_xml())
+    for joint in root.findall(".//joint"):
+        joint.set("armature", "0.03")
+    model_path = tmp_path / "abstract_with_armature.xml"
+    model_path.write_text(ET.tostring(root, encoding="unicode"), encoding="utf-8")
+
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            model_path,
+            domain_randomization=DomainRandomizationConfig(
+                abstract_node_mass_multiplier_range=(0.5, 2.0)
+            ),
+        )
+    )
+    node_multipliers = np.asarray([0.5, 0.75, 1.25, 2.0])
+    domain = replace(
+        env._nominal_domain_randomization_state(),
+        abstract_node_mass_multipliers=jnp.asarray(node_multipliers),
+    )
+    actual = env._model_for_domain(domain)
+
+    cpu_model = mujoco.MjModel.from_xml_path(str(model_path))
+    cpu_data = mujoco.MjData(cpu_model)
+    for node_name, multiplier in zip(
+        env.mujoco_model.node_names, node_multipliers, strict=True
+    ):
+        cpu_model.body_mass[cpu_model.body(node_name).id] *= multiplier
+    mujoco.mj_setConst(cpu_model, cpu_data)
+    expected = mjx.put_model(cpu_model)
+
+    np.testing.assert_allclose(actual.dof_armature, expected.dof_armature, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(actual.dof_M0, expected.dof_M0, rtol=1e-6, atol=1e-7)
+
+
+@pytest.mark.parametrize(
+    "value_range",
+    [(0.0, 1.0), (-1.0, 1.0), (2.0, 1.0), (np.nan, 1.0)],
+)
+def test_mjx_abstract_node_mass_randomization_rejects_invalid_ranges(
+    value_range: tuple[float, float],
+) -> None:
+    with pytest.raises(ValueError, match="strictly positive|finite"):
+        MjxNodeVelocityEnv(
+            TrussEnvConfig(
+                get_mujoco_spec("tetrahedron", realistic=False),
+                domain_randomization=DomainRandomizationConfig(
+                    abstract_node_mass_multiplier_range=value_range
+                ),
+            )
+        )
+
+
+def test_mjx_abstract_node_mass_randomization_rejects_realistic_models() -> None:
+    with pytest.raises(ValueError, match="only supported for abstract"):
+        MjxNodeVelocityEnv(
+            TrussEnvConfig(
+                get_mujoco_spec("tetrahedron", realistic=True),
+                domain_randomization=DomainRandomizationConfig(
+                    abstract_node_mass_multiplier_range=(0.8, 1.2)
+                ),
+            )
+        )
 
 
 def test_mjx_domain_randomization_realistic_rollout_is_finite() -> None:

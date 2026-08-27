@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import warnings
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any, Literal
 
 import jax
@@ -11,7 +11,12 @@ import mujoco  # type: ignore[import-untyped]
 import numpy as np
 from mujoco import mjx
 
-from mujoco_truss_gen.base_env import Range, TrussEnvConfig, _coerce_config
+from mujoco_truss_gen.base_env import (
+    Range,
+    TrussEnvConfig,
+    _coerce_config,
+    _is_abstract_node_model,
+)
 from mujoco_truss_gen.mjx_controllers import MjxAngleBisectorController
 from mujoco_truss_gen.mujoco_model.controllers import NodeVelocityController
 from mujoco_truss_gen.mujoco_model.model import ModelSource, MujocoModel
@@ -97,6 +102,7 @@ class MjxDomainRandomizationState:
     initial_translation_x: jax.Array
     initial_translation_y: jax.Array
     initial_yaw: jax.Array
+    abstract_node_mass_multipliers: jax.Array
 
 
 @jax.tree_util.register_dataclass
@@ -142,6 +148,15 @@ class MjxNodeVelocityEnv:
 
         self.mujoco_model = MujocoModel(_copy_model_source_for_env(self.config.model_source))
         model = self.mujoco_model.model
+        if (
+            self._domain_randomization is not None
+            and self._domain_randomization.abstract_node_mass_multiplier_range is not None
+            and not _is_abstract_node_model(self.mujoco_model)
+        ):
+            raise ValueError(
+                "abstract_node_mass_multiplier_range is only supported for abstract "
+                "per-node slide-joint models."
+            )
         _configure_integrator_for_backend(
             model,
             self.mjx_impl,
@@ -204,6 +219,11 @@ class MjxNodeVelocityEnv:
         self._nominal_gravity_z = float(model.opt.gravity[2])
         self._body_mass_multiplier_range = self._jax_range(
             self._domain_randomization.body_mass_multiplier_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._abstract_node_mass_multiplier_range = self._jax_range(
+            self._domain_randomization.abstract_node_mass_multiplier_range
             if self._domain_randomization is not None
             else None
         )
@@ -322,6 +342,7 @@ class MjxNodeVelocityEnv:
             ],
             dtype=jnp.int32,
         )
+        self._dof_body_ids = jnp.asarray(model.dof_bodyid, dtype=jnp.int32)
         self._initialize_terrain_metadata(model)
         free_qpos_adrs = self.mujoco_model.free_joint_qpos_adrs
         self._pose_position_qpos_indices = jnp.asarray(
@@ -509,15 +530,11 @@ class MjxNodeVelocityEnv:
 
     def _nominal_actuator_acc0_scale(self) -> jax.Array:
         nominal_inverse_qm = jnp.linalg.inv(self._qM0)
-        nominal_quadratic = jnp.einsum(
-            "ij,jk,ik->i",
-            self._actuator_moment0,
-            nominal_inverse_qm,
-            self._actuator_moment0,
-        )
+        nominal_acceleration = self._actuator_moment0 @ nominal_inverse_qm
+        nominal_norm = jnp.linalg.norm(nominal_acceleration, axis=1)
         return jnp.where(
-            nominal_quadratic > 0.0,
-            self.mjx_model.actuator_acc0 / nominal_quadratic,
+            nominal_norm > 0.0,
+            self.mjx_model.actuator_acc0 / nominal_norm,
             0.0,
         )
 
@@ -531,6 +548,7 @@ class MjxNodeVelocityEnv:
                 )
             for name in (
                 "body_mass_multiplier_range",
+                "abstract_node_mass_multiplier_range",
                 "body_inertia_multiplier_range",
                 "dof_damping_multiplier_range",
                 "dof_armature_range",
@@ -551,6 +569,12 @@ class MjxNodeVelocityEnv:
                 "initial_yaw_range",
             ):
                 self._validate_range(getattr(randomization, name), name)
+            node_mass_range = randomization.abstract_node_mass_multiplier_range
+            if node_mass_range is not None and float(node_mass_range[0]) <= 0.0:
+                raise ValueError(
+                    "abstract_node_mass_multiplier_range must contain finite, strictly "
+                    "positive values with low <= high."
+                )
         if int(self.config.max_steps) <= 0:
             raise ValueError("max_steps must be greater than zero.")
         if int(self.config.nsubsteps) <= 0:
@@ -1022,6 +1046,11 @@ class MjxNodeVelocityEnv:
             body_mass_multiplier=self._sample_jax_range(
                 keys[0], self._body_mass_multiplier_range, 1.0
             ),
+            abstract_node_mass_multipliers=self._sample_jax_range_vector(
+                jax.random.fold_in(key, 19),
+                self._abstract_node_mass_multiplier_range,
+                len(self.mujoco_model.node_names),
+            ),
             body_inertia_multiplier=self._sample_jax_range(
                 keys[1], self._body_inertia_multiplier_range, 1.0
             ),
@@ -1074,6 +1103,9 @@ class MjxNodeVelocityEnv:
         dtype = self._domain_dtype
         return MjxDomainRandomizationState(
             body_mass_multiplier=jnp.asarray(1.0, dtype=dtype),
+            abstract_node_mass_multipliers=jnp.ones(
+                (len(self.mujoco_model.node_names),), dtype=dtype
+            ),
             body_inertia_multiplier=jnp.asarray(1.0, dtype=dtype),
             dof_damping_multiplier=jnp.asarray(1.0, dtype=dtype),
             dof_armature=jnp.asarray(0.0, dtype=dtype),
@@ -1137,17 +1169,27 @@ class MjxNodeVelocityEnv:
     def _model_for_domain(self, domain: MjxDomainRandomizationState) -> mjx.Model:
         model = self.mjx_model
 
-        if self._body_mass_multiplier_range is not None:
-            multiplier = domain.body_mass_multiplier
-            inverse_multiplier = 1.0 / multiplier
+        mass_is_randomized = (
+            self._body_mass_multiplier_range is not None
+            or self._abstract_node_mass_multiplier_range is not None
+        )
+        body_mass_multipliers, dof_mass_multipliers = self._mass_multipliers(domain)
+        if mass_is_randomized:
+            body_mass = model.body_mass * body_mass_multipliers
+            if self._abstract_node_mass_multiplier_range is not None:
+                # Supported abstract models are flat: every physical node body is a
+                # direct child of the world. Each node's subtree mass is therefore
+                # its own mass, while the world's subtree mass is their sum.
+                body_subtreemass = body_mass.at[0].set(jnp.sum(body_mass))
+            else:
+                body_subtreemass = model.body_subtreemass * domain.body_mass_multiplier
             model = model.replace(
-                body_mass=model.body_mass * multiplier,
-                body_subtreemass=model.body_subtreemass * multiplier,
-                body_invweight0=model.body_invweight0 * inverse_multiplier,
-                dof_invweight0=model.dof_invweight0 * inverse_multiplier,
-                dof_M0=model.dof_M0 * multiplier,
-                tendon_invweight0=model.tendon_invweight0 * inverse_multiplier,
-                actuator_acc0=model.actuator_acc0 * inverse_multiplier,
+                body_mass=body_mass,
+                body_subtreemass=body_subtreemass,
+                body_invweight0=model.body_invweight0 / body_mass_multipliers[:, None],
+                dof_invweight0=model.dof_invweight0 / dof_mass_multipliers,
+                dof_M0=(model.dof_M0 - model.dof_armature) * dof_mass_multipliers
+                + model.dof_armature,
             )
         if self._body_inertia_multiplier_range is not None:
             model = model.replace(body_inertia=model.body_inertia * domain.body_inertia_multiplier)
@@ -1158,7 +1200,7 @@ class MjxNodeVelocityEnv:
                 dof_armature=jnp.full_like(model.dof_armature, domain.dof_armature),
                 dof_M0=model.dof_M0
                 + domain.dof_armature
-                - self.mjx_model.dof_armature * domain.body_mass_multiplier,
+                - self.mjx_model.dof_armature,
             )
         if self._dof_frictionloss_range is not None:
             model = model.replace(
@@ -1207,7 +1249,7 @@ class MjxNodeVelocityEnv:
                 )
             )
         if (
-            self._body_mass_multiplier_range is not None
+            mass_is_randomized
             or self._dof_armature_range is not None
             or self._tendon_armature_range is not None
         ):
@@ -1226,9 +1268,7 @@ class MjxNodeVelocityEnv:
         self,
         domain: MjxDomainRandomizationState,
     ) -> jax.Array:
-        mass_multiplier = (
-            domain.body_mass_multiplier if self._body_mass_multiplier_range is not None else 1.0
-        )
+        _, dof_mass_multipliers = self._mass_multipliers(domain)
         dof_armature = (
             jnp.full_like(self.mjx_model.dof_armature, domain.dof_armature)
             if self._dof_armature_range is not None
@@ -1243,13 +1283,27 @@ class MjxNodeVelocityEnv:
             jnp.square(self._tendon_jacobian0) * tendon_armature[:, None],
             axis=0,
         )
-        qm = (
-            self._nominal_qm_physical * mass_multiplier
-            + jnp.diag(dof_armature)
-            + jnp.diag(tendon_armature_diag)
-        )
+        if self._abstract_node_mass_multiplier_range is not None:
+            physical_qm = jnp.diag(jnp.diag(self._nominal_qm_physical) * dof_mass_multipliers)
+        else:
+            physical_qm = self._nominal_qm_physical * domain.body_mass_multiplier
+        qm = physical_qm + jnp.diag(dof_armature) + jnp.diag(tendon_armature_diag)
         inverse: jax.Array = jnp.linalg.inv(qm)
         return inverse
+
+    def _mass_multipliers(
+        self,
+        domain: MjxDomainRandomizationState,
+    ) -> tuple[jax.Array, jax.Array]:
+        global_multiplier = (
+            domain.body_mass_multiplier if self._body_mass_multiplier_range is not None else 1.0
+        )
+        body_multipliers = jnp.full_like(self.mjx_model.body_mass, global_multiplier)
+        if self._abstract_node_mass_multiplier_range is not None:
+            body_multipliers = body_multipliers.at[self._node_body_ids].multiply(
+                domain.abstract_node_mass_multipliers
+            )
+        return body_multipliers, body_multipliers[self._dof_body_ids]
 
     def _tendon_invweight0_for_domain(
         self,
@@ -1258,13 +1312,8 @@ class MjxNodeVelocityEnv:
         return jnp.einsum("ij,jk,ik->i", self._tendon_jacobian0, inverse_qm, self._tendon_jacobian0)
 
     def _actuator_acc0_for_domain(self, inverse_qm: jax.Array) -> jax.Array:
-        actuator_quadratic = jnp.einsum(
-            "ij,jk,ik->i",
-            self._actuator_moment0,
-            inverse_qm,
-            self._actuator_moment0,
-        )
-        return actuator_quadratic * self._actuator_acc0_scale
+        actuator_acceleration = self._actuator_moment0 @ inverse_qm
+        return jnp.linalg.norm(actuator_acceleration, axis=1) * self._actuator_acc0_scale
 
     def _sample_jax_range(
         self,
@@ -1276,6 +1325,23 @@ class MjxNodeVelocityEnv:
             return jnp.asarray(default, dtype=self._domain_dtype)
         low, high = value_range
         return jax.random.uniform(key, (), minval=low, maxval=high, dtype=self._domain_dtype)
+
+    def _sample_jax_range_vector(
+        self,
+        key: jax.Array,
+        value_range: tuple[jax.Array, jax.Array] | None,
+        size: int,
+    ) -> jax.Array:
+        if value_range is None:
+            return jnp.ones((size,), dtype=self._domain_dtype)
+        low, high = value_range
+        return jax.random.uniform(
+            key,
+            (size,),
+            minval=low,
+            maxval=high,
+            dtype=self._domain_dtype,
+        )
 
     def _jax_range(self, value_range: Range | None) -> tuple[jax.Array, jax.Array] | None:
         if value_range is None:
@@ -1621,8 +1687,15 @@ class MjxNodeVelocityEnv:
             raise ValueError("state batch dimension must match the number of step keys.")
         if state.node_commands.shape != expected_action_shape:
             raise ValueError("state node-command shape must match the action batch shape.")
-        for value in jax.tree.leaves(state.domain_randomization):
-            if value.shape != (batch_size,):
+        expected_node_mass_shape = (batch_size, len(self.mujoco_model.node_names))
+        for field in fields(state.domain_randomization):
+            value = getattr(state.domain_randomization, field.name)
+            expected_shape = (
+                expected_node_mass_shape
+                if field.name == "abstract_node_mass_multipliers"
+                else (batch_size,)
+            )
+            if value.shape != expected_shape:
                 raise ValueError(
                     "state domain-randomization shape must match the number of step keys."
                 )

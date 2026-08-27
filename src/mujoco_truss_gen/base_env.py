@@ -55,6 +55,7 @@ class DomainRandomizationConfig:
     initial_translation_x_range: Range | None = None
     initial_translation_y_range: Range | None = None
     initial_yaw_range: Range | None = None
+    abstract_node_mass_multiplier_range: Range | None = None
 
 
 @dataclass(slots=True)
@@ -137,7 +138,7 @@ class MujocoTrussEnv(gym.Env):
         self._define_action_space()
         self._define_observation_space()
 
-    def _randomize_domain(self) -> dict[str, float]:
+    def _randomize_domain(self) -> dict[str, Any]:
         randomization = self.config.domain_randomization
         if randomization is None:
             return {}
@@ -218,10 +219,14 @@ class MujocoTrussEnv(gym.Env):
     def _apply_runtime_domain_randomization(
         self,
         randomization: DomainRandomizationConfig,
-    ) -> dict[str, float]:
+    ) -> dict[str, Any]:
         self._restore_runtime_nominals()
         model = self.mj_model.model
-        samples: dict[str, float] = {}
+        samples: dict[str, Any] = {}
+        _validate_abstract_node_mass_randomization(
+            randomization.abstract_node_mass_multiplier_range,
+            self.mj_model,
+        )
 
         body_mass_multiplier = _sample_range(
             self.np_random,
@@ -231,6 +236,17 @@ class MujocoTrussEnv(gym.Env):
         if body_mass_multiplier is not None:
             model.body_mass[:] = self._runtime_nominals["body_mass"] * body_mass_multiplier
             samples["body_mass_multiplier"] = body_mass_multiplier
+
+        abstract_node_mass_multipliers = _sample_abstract_node_mass_multipliers(
+            self.np_random,
+            randomization.abstract_node_mass_multiplier_range,
+            self.mj_model,
+        )
+        if abstract_node_mass_multipliers is not None:
+            for node_name, multiplier in abstract_node_mass_multipliers.items():
+                body_id = self.mj_model.node_body_ids[node_name]
+                model.body_mass[body_id] *= multiplier
+            samples["abstract_node_mass_multipliers"] = abstract_node_mass_multipliers
 
         body_inertia_multiplier = _sample_range(
             self.np_random,
@@ -677,3 +693,53 @@ def _sample_range(
     if not np.isfinite(low) or not np.isfinite(high) or low > high:
         raise ValueError(f"{name} must contain finite values with low <= high.")
     return float(rng.uniform(low, high))
+
+
+def _sample_abstract_node_mass_multipliers(
+    rng: np.random.Generator,
+    value_range: Range | None,
+    model: MujocoModel,
+) -> dict[str, float] | None:
+    if value_range is None:
+        return None
+
+    _validate_abstract_node_mass_randomization(value_range, model)
+    low, high = (float(value_range[0]), float(value_range[1]))
+
+    multipliers = rng.uniform(low, high, size=len(model.node_names))
+    return {
+        node_name: float(multiplier)
+        for node_name, multiplier in zip(model.node_names, multipliers, strict=True)
+    }
+
+
+def _validate_abstract_node_mass_randomization(
+    value_range: Range | None,
+    model: MujocoModel,
+) -> None:
+    if value_range is None:
+        return
+
+    low, high = (float(value_range[0]), float(value_range[1]))
+    if not np.isfinite(low) or not np.isfinite(high) or low > high or low <= 0.0:
+        raise ValueError(
+            "abstract_node_mass_multiplier_range must contain finite, strictly positive "
+            "values with low <= high."
+        )
+    if not _is_abstract_node_model(model):
+        raise ValueError(
+            "abstract_node_mass_multiplier_range is only supported for abstract "
+            "per-node slide-joint models."
+        )
+
+
+def _is_abstract_node_model(model: MujocoModel) -> bool:
+    return (
+        bool(model.node_names)
+        and model.model.nbody == len(model.node_names) + 1
+        and all(
+            model.node_axes[node_name] == ("x", "y", "z")
+            and model.model.body_parentid[model.node_body_ids[node_name]] == 0
+            for node_name in model.node_names
+        )
+    )

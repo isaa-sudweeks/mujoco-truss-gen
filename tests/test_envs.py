@@ -1009,6 +1009,88 @@ def test_env_runtime_domain_randomization_restores_nominals_between_resets() -> 
         env.close()
 
 
+def test_abstract_node_mass_randomization_is_independent_composed_and_reproducible() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            domain_randomization=DomainRandomizationConfig(
+                body_mass_multiplier_range=(2.0, 2.0),
+                abstract_node_mass_multiplier_range=(0.5, 1.5),
+            ),
+        )
+    )
+    try:
+        nominal_mass = env.mj_model.model.body_mass.copy()
+
+        _, first_info = env.reset(seed=23)
+        first_samples = first_info["domain_randomization"][
+            "abstract_node_mass_multipliers"
+        ]
+        assert list(first_samples) == env.mj_model.node_names
+        assert len(set(first_samples.values())) == len(env.mj_model.node_names)
+        for node_name, multiplier in first_samples.items():
+            body_id = env.mj_model.node_body_ids[node_name]
+            assert env.mj_model.model.body_mass[body_id] == pytest.approx(
+                nominal_mass[body_id] * 2.0 * multiplier
+            )
+
+        _, repeated_info = env.reset(seed=23)
+        assert repeated_info["domain_randomization"][
+            "abstract_node_mass_multipliers"
+        ] == first_samples
+
+        _, different_info = env.reset(seed=24)
+        different_samples = different_info["domain_randomization"][
+            "abstract_node_mass_multipliers"
+        ]
+        assert different_samples != first_samples
+        for node_name, multiplier in different_samples.items():
+            body_id = env.mj_model.node_body_ids[node_name]
+            assert env.mj_model.model.body_mass[body_id] == pytest.approx(
+                nominal_mass[body_id] * 2.0 * multiplier
+            )
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
+    "value_range",
+    [(0.0, 1.0), (-1.0, 1.0), (2.0, 1.0), (np.nan, 1.0)],
+)
+def test_abstract_node_mass_randomization_rejects_invalid_ranges(
+    value_range: tuple[float, float],
+) -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            domain_randomization=DomainRandomizationConfig(
+                abstract_node_mass_multiplier_range=value_range
+            ),
+        )
+    )
+    try:
+        with pytest.raises(ValueError, match="strictly positive"):
+            env.reset(seed=1)
+    finally:
+        env.close()
+
+
+def test_abstract_node_mass_randomization_rejects_realistic_models() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=True),
+            domain_randomization=DomainRandomizationConfig(
+                abstract_node_mass_multiplier_range=(0.8, 1.2)
+            ),
+        )
+    )
+    try:
+        with pytest.raises(ValueError, match="only supported for abstract"):
+            env.reset(seed=1)
+    finally:
+        env.close()
+
+
 def test_initial_pose_randomization_reports_fixed_samples() -> None:
     env = MujocoTrussEnv(
         TrussEnvConfig(
