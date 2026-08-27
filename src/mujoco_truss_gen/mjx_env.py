@@ -325,14 +325,10 @@ class MjxNodeVelocityEnv:
         self._ctrl_low = jnp.asarray(ctrlrange[:, 0])
         self._ctrl_high = jnp.asarray(ctrlrange[:, 1])
 
-        control_graph = self.mujoco_model.control_graph
         self._control_body_ids = jnp.asarray(
-            [
-                self.mujoco_model.node_body_ids[
-                    control_graph.control_node_to_physical_node[node_name]
-                ]
-                for node_name in self._controller.node_names
-            ],
+            self.mujoco_model.get_control_node_body_ids(
+                self.config.control_node_observation_source
+            ),
             dtype=jnp.int32,
         )
         self._node_body_ids = jnp.asarray(

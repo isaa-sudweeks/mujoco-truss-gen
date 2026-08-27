@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Literal
 
 import mujoco
 import numpy as np
@@ -20,6 +21,7 @@ from mujoco_truss_gen.mujoco_model.tendons import initialize_actuator_lengths
 from mujoco_truss_gen.mujoco_model.terrain import sample_model_terrain_height
 
 ModelSource = mujoco.MjSpec | mujoco.MjModel | str | Path
+ControlNodeObservationSource = Literal["physical_node", "connector_ball"]
 
 
 class MujocoModel:
@@ -449,40 +451,97 @@ class MujocoModel:
     def control_node_names(self) -> list[str]:
         return list(self.control_graph.control_node_names)
 
-    def get_control_node_position_dict(self) -> dict[str, np.ndarray]:
+    def get_control_node_body_ids(
+        self,
+        observation_source: ControlNodeObservationSource = "physical_node",
+    ) -> np.ndarray:
+        """Return body IDs supplying each control node's kinematic observation."""
+
+        if observation_source not in ("physical_node", "connector_ball"):
+            raise ValueError(
+                "control_node_observation_source must be 'physical_node' or "
+                f"'connector_ball'; got {observation_source!r}."
+            )
+
+        if observation_source == "physical_node":
+            return np.asarray(
+                [
+                    self.node_body_ids[
+                        self._physical_node_for_control_node(control_node_name)
+                    ]
+                    for control_node_name in self.control_graph.control_node_names
+                ],
+                dtype=int,
+            )
+
+        if not self.control_graph.enabled:
+            raise ValueError(
+                "control_node_observation_source='connector_ball' requires embedded "
+                "control-graph metadata with logical-node mappings, but this model has none. "
+                "Use a generated realistic model with control metadata or select "
+                "'physical_node'."
+            )
+
+        body_ids: list[int] = []
+        missing_body_names: list[str] = []
+        for control_node_name in self.control_graph.control_node_names:
+            logical_node = self.control_graph.control_node_to_logical_node.get(control_node_name)
+            if logical_node is None:
+                raise ValueError(
+                    "control_node_observation_source='connector_ball' requires a logical-node "
+                    f"mapping for control node {control_node_name!r}."
+                )
+            body_name = f"connector_ball_{logical_node}"
+            body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+            if body_id < 0 and body_name not in missing_body_names:
+                missing_body_names.append(body_name)
+            body_ids.append(body_id)
+
+        if missing_body_names:
+            raise ValueError(
+                "control_node_observation_source='connector_ball' requires a connector ball "
+                "for every logical control node; missing body/bodies: "
+                + ", ".join(missing_body_names)
+                + ". Use a realistic model with connector balls or select 'physical_node'."
+            )
+        return np.asarray(body_ids, dtype=int)
+
+    def get_control_node_position_dict(
+        self,
+        observation_source: ControlNodeObservationSource = "physical_node",
+    ) -> dict[str, np.ndarray]:
+        body_ids = self.get_control_node_body_ids(observation_source)
         return {
-            control_node_name: self.data.xpos[
-                self.node_body_ids[self._physical_node_for_control_node(control_node_name)]
-            ].copy()
-            for control_node_name in self.control_graph.control_node_names
+            control_node_name: self.data.xpos[body_id].copy()
+            for control_node_name, body_id in zip(
+                self.control_graph.control_node_names, body_ids, strict=True
+            )
         }
 
-    def get_control_node_velocity_linear_dict(self) -> dict[str, np.ndarray]:
+    def get_control_node_velocity_linear_dict(
+        self,
+        observation_source: ControlNodeObservationSource = "physical_node",
+    ) -> dict[str, np.ndarray]:
+        body_ids = self.get_control_node_body_ids(observation_source)
         return {
-            control_node_name: self.data.cvel[
-                self.node_body_ids[self._physical_node_for_control_node(control_node_name)]
-            ][3:].copy()
-            for control_node_name in self.control_graph.control_node_names
+            control_node_name: self.data.cvel[body_id][3:].copy()
+            for control_node_name, body_id in zip(
+                self.control_graph.control_node_names, body_ids, strict=True
+            )
         }
 
-    def get_control_node_position_matrix(self) -> np.ndarray:
-        return np.array(
-            [
-                self.data.xpos[
-                    self.node_body_ids[self._physical_node_for_control_node(control_node_name)]
-                ]
-                for control_node_name in self.control_graph.control_node_names
-            ]
-        )
+    def get_control_node_position_matrix(
+        self,
+        observation_source: ControlNodeObservationSource = "physical_node",
+    ) -> np.ndarray:
+        return np.array(self.data.xpos[self.get_control_node_body_ids(observation_source)])
 
-    def get_control_node_linear_velocity_matrix(self) -> np.ndarray:
+    def get_control_node_linear_velocity_matrix(
+        self,
+        observation_source: ControlNodeObservationSource = "physical_node",
+    ) -> np.ndarray:
         return np.array(
-            [
-                self.data.cvel[
-                    self.node_body_ids[self._physical_node_for_control_node(control_node_name)]
-                ][3:]
-                for control_node_name in self.control_graph.control_node_names
-            ]
+            self.data.cvel[self.get_control_node_body_ids(observation_source), 3:]
         )
 
     def _physical_node_for_control_node(self, control_node_name: str) -> str:

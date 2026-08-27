@@ -5,7 +5,11 @@ from typing import Any, Literal
 import mujoco
 import numpy as np
 
-from mujoco_truss_gen.mujoco_model.model import ModelSource, MujocoModel
+from mujoco_truss_gen.mujoco_model.model import (
+    ControlNodeObservationSource,
+    ModelSource,
+    MujocoModel,
+)
 
 GraphView = Literal["physical", "logical", "control"]
 LogicalAggregation = Literal["mean", "connector_ball"]
@@ -73,6 +77,7 @@ def get_node_features(
     *,
     graph_view: GraphView = "physical",
     aggregation: LogicalAggregation = "mean",
+    control_node_observation_source: ControlNodeObservationSource = "physical_node",
 ) -> np.ndarray:
     """
     Returns a node feature array of shape (num_nodes, num_features) for use in PyTorch Geometric.
@@ -88,6 +93,10 @@ def get_node_features(
             ``"mean"`` averages cloned node bodies. ``"connector_ball"`` uses the
             matching connector ball body when present and falls back to the physical
             node instance otherwise.
+        control_node_observation_source: Kinematic body used only when
+            ``graph_view="control"``. ``"physical_node"`` preserves the existing
+            control-node body mapping. ``"connector_ball"`` uses the connector ball
+            belonging to each control node's logical node.
 
     Returns:
         np.ndarray: Float array of shape (N, 6) where N is the number of nodes.
@@ -101,7 +110,7 @@ def get_node_features(
     if graph_view == "logical":
         return _get_logical_node_features(model, aggregation)
     if graph_view == "control":
-        return _get_control_node_features(model)
+        return _get_control_node_features(model, control_node_observation_source)
 
     positions = model.get_node_position_matrix()
     velocities = model.get_node_linear_velocity_matrix()
@@ -145,6 +154,7 @@ def get_networkx_graph(
     *,
     graph_view: GraphView = "control",
     aggregation: LogicalAggregation = "mean",
+    control_node_observation_source: ControlNodeObservationSource = "physical_node",
 ):
     """
     Returns a NetworkX graph for the requested GNN graph view.
@@ -165,7 +175,12 @@ def get_networkx_graph(
 
     model = _coerce_model(source)
     node_names = _graph_node_names(model, graph_view)
-    features = get_node_features(model, graph_view=graph_view, aggregation=aggregation)
+    features = get_node_features(
+        model,
+        graph_view=graph_view,
+        aggregation=aggregation,
+        control_node_observation_source=control_node_observation_source,
+    )
     graph = nx.MultiGraph()
 
     for index, node_name in enumerate(node_names):
@@ -190,6 +205,7 @@ def view_graph(
     *,
     graph_view: GraphView = "control",
     aggregation: LogicalAggregation = "mean",
+    control_node_observation_source: ControlNodeObservationSource = "physical_node",
     layout: Literal["spring", "kamada_kawai", "spectral", "physical"] = "spring",
     dim: Literal[2, 3] = 2,
     overlap_offset: float = 0.05,
@@ -209,6 +225,8 @@ def view_graph(
         source: A MujocoModel, mujoco.MjSpec, XML string/path, or mujoco.MjModel.
         graph_view: ``"physical"``, ``"logical"``, or ``"control"``.
         aggregation: Logical-node aggregation for ``graph_view="logical"``.
+        control_node_observation_source: Kinematic body source for control-node
+            features when ``graph_view="control"``.
         layout: NetworkX layout. ``"physical"`` uses node positions from the
             selected graph features when available, matching the current MuJoCo pose.
         dim: Plot and layout dimension. Use ``3`` with ``layout="physical"`` to
@@ -246,6 +264,7 @@ def view_graph(
         source,
         graph_view=graph_view,
         aggregation=aggregation,
+        control_node_observation_source=control_node_observation_source,
     )
     if ax is None:
         subplot_kw = {"projection": "3d"} if dim == 3 else None
@@ -591,9 +610,12 @@ def _get_control_edge_index(model: MujocoModel) -> np.ndarray:
     return np.array(edges, dtype=np.int64).T
 
 
-def _get_control_node_features(model: MujocoModel) -> np.ndarray:
-    positions = model.get_control_node_position_matrix()
-    velocities = model.get_control_node_linear_velocity_matrix()
+def _get_control_node_features(
+    model: MujocoModel,
+    observation_source: ControlNodeObservationSource,
+) -> np.ndarray:
+    positions = model.get_control_node_position_matrix(observation_source)
+    velocities = model.get_control_node_linear_velocity_matrix(observation_source)
     if positions.size == 0 or velocities.size == 0:
         return np.empty((0, 6), dtype=np.float32)
     return np.concatenate([positions, velocities], axis=1).astype(np.float32)

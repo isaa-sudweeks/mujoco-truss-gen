@@ -2372,6 +2372,131 @@ def test_control_graph_maps_abstract_duplicates_to_shared_physical_nodes() -> No
     np.testing.assert_allclose(abstract_features[0], abstract_features[3])
 
 
+def test_control_graph_connector_ball_features_preserve_identity_and_share_kinematics() -> None:
+    model = MujocoModel(get_mujoco_spec("tetrahedron", realistic=True))
+    control_graph = model.control_graph
+
+    default_features = get_node_features(model, graph_view="control")
+    physical_features = get_node_features(
+        model,
+        graph_view="control",
+        control_node_observation_source="physical_node",
+    )
+    connector_features = get_node_features(
+        model,
+        graph_view="control",
+        control_node_observation_source="connector_ball",
+    )
+
+    np.testing.assert_allclose(default_features, physical_features)
+    assert connector_features.shape == physical_features.shape
+    assert len(control_graph.control_node_names) == connector_features.shape[0]
+
+    by_logical_node: dict[str, list[int]] = {}
+    for index, control_node_name in enumerate(control_graph.control_node_names):
+        logical_node = control_graph.control_node_to_logical_node[control_node_name]
+        by_logical_node.setdefault(logical_node, []).append(index)
+
+    shared_indices = next(indices for indices in by_logical_node.values() if len(indices) > 1)
+    np.testing.assert_allclose(
+        connector_features[shared_indices],
+        np.repeat(connector_features[shared_indices[:1]], len(shared_indices), axis=0),
+    )
+    assert not np.allclose(
+        physical_features[shared_indices[0]],
+        physical_features[shared_indices[1]],
+    )
+
+
+def test_connector_ball_control_observations_validate_missing_bodies_clearly() -> None:
+    abstract_spec = get_mujoco_spec("tetrahedron", realistic=False)
+
+    with pytest.raises(
+        ValueError,
+        match="connector_ball.*missing body/bodies.*connector_ball_node_1",
+    ):
+        get_node_features(
+            abstract_spec,
+            graph_view="control",
+            control_node_observation_source="connector_ball",
+        )
+
+    with pytest.raises(ValueError, match="connector_ball.*realistic model"):
+        MujocoNodeVelocityCommandEnv(
+            TrussEnvConfig(
+                abstract_spec,
+                control_node_observation_source="connector_ball",
+            )
+        )
+
+
+def test_connector_ball_control_observations_reject_legacy_route_metadata(tmp_path) -> None:
+    spec = get_mujoco_spec("tetrahedron", realistic=False)
+    root = ET.fromstring(spec.to_xml())
+    custom = root.find("custom")
+    assert custom is not None
+    control_graph_text = custom.find("text[@name='mujoco_truss_gen_control_graph']")
+    assert control_graph_text is not None
+    custom.remove(control_graph_text)
+    legacy_xml_path = tmp_path / "legacy_route_model.xml"
+    legacy_xml_path.write_text(ET.tostring(root, encoding="unicode"), encoding="utf-8")
+
+    physical_env = MujocoNodeVelocityCommandEnv(
+        TrussEnvConfig(
+            legacy_xml_path,
+            control_node_observation_source="physical_node",
+        )
+    )
+    try:
+        assert physical_env.node_velocity_controller.enabled
+        assert not physical_env.mj_model.control_graph.enabled
+        assert physical_env.observation_space.shape[0] > 0
+    finally:
+        physical_env.close()
+
+    with pytest.raises(
+        ValueError,
+        match="connector_ball.*requires embedded control-graph metadata.*model has none",
+    ):
+        MujocoNodeVelocityCommandEnv(
+            TrussEnvConfig(
+                legacy_xml_path,
+                control_node_observation_source="connector_ball",
+            )
+        )
+
+
+def test_control_observation_source_does_not_change_native_action_routing() -> None:
+    spec = get_mujoco_spec("tetrahedron", realistic=True)
+    physical_env = MujocoNodeVelocityCommandEnv(
+        TrussEnvConfig(spec, control_node_observation_source="physical_node")
+    )
+    connector_env = MujocoNodeVelocityCommandEnv(
+        TrussEnvConfig(spec, control_node_observation_source="connector_ball")
+    )
+    try:
+        physical_controller = physical_env.node_velocity_controller
+        connector_controller = connector_env.node_velocity_controller
+        action = np.linspace(-0.01, 0.01, physical_env.action_space.shape[0])
+
+        assert physical_controller.node_names == connector_controller.node_names
+        assert (
+            physical_controller.actuator_ids.tolist()
+            == connector_controller.actuator_ids.tolist()
+        )
+        np.testing.assert_allclose(
+            physical_controller.incidence_matrix,
+            connector_controller.incidence_matrix,
+        )
+        np.testing.assert_allclose(
+            physical_controller.clipped_edge_commands(physical_env.mj_model.model, action),
+            connector_controller.clipped_edge_commands(connector_env.mj_model.model, action),
+        )
+    finally:
+        physical_env.close()
+        connector_env.close()
+
+
 def test_control_graph_gnn_edges_include_connector_edge_types() -> None:
     model = MujocoModel(get_mujoco_spec("tetrahedron", realistic=True))
 
