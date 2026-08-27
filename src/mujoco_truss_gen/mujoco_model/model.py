@@ -474,6 +474,14 @@ class MujocoModel:
                 dtype=int,
             )
 
+        if not self.control_graph.enabled:
+            raise ValueError(
+                "control_node_observation_source='connector_ball' requires embedded "
+                "control-graph metadata with logical-node mappings, but this model has none. "
+                "Use a generated realistic model with control metadata or select "
+                "'physical_node'."
+            )
+
         body_ids: list[int] = []
         missing_body_names: list[str] = []
         for control_node_name in self.control_graph.control_node_names:

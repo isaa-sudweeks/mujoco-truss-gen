@@ -2348,6 +2348,42 @@ def test_connector_ball_control_observations_validate_missing_bodies_clearly() -
         )
 
 
+def test_connector_ball_control_observations_reject_legacy_route_metadata(tmp_path) -> None:
+    spec = get_mujoco_spec("tetrahedron", realistic=False)
+    root = ET.fromstring(spec.to_xml())
+    custom = root.find("custom")
+    assert custom is not None
+    control_graph_text = custom.find("text[@name='mujoco_truss_gen_control_graph']")
+    assert control_graph_text is not None
+    custom.remove(control_graph_text)
+    legacy_xml_path = tmp_path / "legacy_route_model.xml"
+    legacy_xml_path.write_text(ET.tostring(root, encoding="unicode"), encoding="utf-8")
+
+    physical_env = MujocoNodeVelocityCommandEnv(
+        TrussEnvConfig(
+            legacy_xml_path,
+            control_node_observation_source="physical_node",
+        )
+    )
+    try:
+        assert physical_env.node_velocity_controller.enabled
+        assert not physical_env.mj_model.control_graph.enabled
+        assert physical_env.observation_space.shape[0] > 0
+    finally:
+        physical_env.close()
+
+    with pytest.raises(
+        ValueError,
+        match="connector_ball.*requires embedded control-graph metadata.*model has none",
+    ):
+        MujocoNodeVelocityCommandEnv(
+            TrussEnvConfig(
+                legacy_xml_path,
+                control_node_observation_source="connector_ball",
+            )
+        )
+
+
 def test_control_observation_source_does_not_change_native_action_routing() -> None:
     spec = get_mujoco_spec("tetrahedron", realistic=True)
     physical_env = MujocoNodeVelocityCommandEnv(
