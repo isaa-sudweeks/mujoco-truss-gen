@@ -1129,6 +1129,41 @@ def test_mjx_independent_node_mass_patch_matches_cpu_setconst() -> None:
     assert np.all(np.isfinite(np.asarray(reward)))
 
 
+def test_mjx_independent_node_mass_preserves_nominal_dof_armature(tmp_path: Path) -> None:
+    root = ET.fromstring(get_mujoco_spec("tetrahedron", realistic=False).to_xml())
+    for joint in root.findall(".//joint"):
+        joint.set("armature", "0.03")
+    model_path = tmp_path / "abstract_with_armature.xml"
+    model_path.write_text(ET.tostring(root, encoding="unicode"), encoding="utf-8")
+
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            model_path,
+            domain_randomization=DomainRandomizationConfig(
+                abstract_node_mass_multiplier_range=(0.5, 2.0)
+            ),
+        )
+    )
+    node_multipliers = np.asarray([0.5, 0.75, 1.25, 2.0])
+    domain = replace(
+        env._nominal_domain_randomization_state(),
+        abstract_node_mass_multipliers=jnp.asarray(node_multipliers),
+    )
+    actual = env._model_for_domain(domain)
+
+    cpu_model = mujoco.MjModel.from_xml_path(str(model_path))
+    cpu_data = mujoco.MjData(cpu_model)
+    for node_name, multiplier in zip(
+        env.mujoco_model.node_names, node_multipliers, strict=True
+    ):
+        cpu_model.body_mass[cpu_model.body(node_name).id] *= multiplier
+    mujoco.mj_setConst(cpu_model, cpu_data)
+    expected = mjx.put_model(cpu_model)
+
+    np.testing.assert_allclose(actual.dof_armature, expected.dof_armature, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(actual.dof_M0, expected.dof_M0, rtol=1e-6, atol=1e-7)
+
+
 @pytest.mark.parametrize(
     "value_range",
     [(0.0, 1.0), (-1.0, 1.0), (2.0, 1.0), (np.nan, 1.0)],

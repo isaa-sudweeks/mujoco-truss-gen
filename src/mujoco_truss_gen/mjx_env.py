@@ -327,18 +327,6 @@ class MjxNodeVelocityEnv:
             dtype=jnp.int32,
         )
         self._dof_body_ids = jnp.asarray(model.dof_bodyid, dtype=jnp.int32)
-        subtree_membership = np.zeros((model.nbody, model.nbody), dtype=float)
-        for descendant_id in range(model.nbody):
-            ancestor_id = descendant_id
-            while True:
-                subtree_membership[ancestor_id, descendant_id] = 1.0
-                if ancestor_id == 0:
-                    break
-                ancestor_id = int(model.body_parentid[ancestor_id])
-        self._body_subtree_membership = jnp.asarray(
-            subtree_membership,
-            dtype=self.mjx_model.body_mass.dtype,
-        )
         self._initialize_terrain_metadata(model)
         free_qpos_adrs = self.mujoco_model.free_joint_qpos_adrs
         self._pose_position_qpos_indices = jnp.asarray(
@@ -1020,12 +1008,20 @@ class MjxNodeVelocityEnv:
         body_mass_multipliers, dof_mass_multipliers = self._mass_multipliers(domain)
         if mass_is_randomized:
             body_mass = model.body_mass * body_mass_multipliers
+            if self._abstract_node_mass_multiplier_range is not None:
+                # Supported abstract models are flat: every physical node body is a
+                # direct child of the world. Each node's subtree mass is therefore
+                # its own mass, while the world's subtree mass is their sum.
+                body_subtreemass = body_mass.at[0].set(jnp.sum(body_mass))
+            else:
+                body_subtreemass = model.body_subtreemass * domain.body_mass_multiplier
             model = model.replace(
                 body_mass=body_mass,
-                body_subtreemass=self._body_subtree_membership @ body_mass,
+                body_subtreemass=body_subtreemass,
                 body_invweight0=model.body_invweight0 / body_mass_multipliers[:, None],
                 dof_invweight0=model.dof_invweight0 / dof_mass_multipliers,
-                dof_M0=model.dof_M0 * dof_mass_multipliers,
+                dof_M0=(model.dof_M0 - model.dof_armature) * dof_mass_multipliers
+                + model.dof_armature,
             )
         if self._body_inertia_multiplier_range is not None:
             model = model.replace(body_inertia=model.body_inertia * domain.body_inertia_multiplier)
@@ -1036,7 +1032,7 @@ class MjxNodeVelocityEnv:
                 dof_armature=jnp.full_like(model.dof_armature, domain.dof_armature),
                 dof_M0=model.dof_M0
                 + domain.dof_armature
-                - self.mjx_model.dof_armature * dof_mass_multipliers,
+                - self.mjx_model.dof_armature,
             )
         if self._dof_frictionloss_range is not None:
             model = model.replace(
