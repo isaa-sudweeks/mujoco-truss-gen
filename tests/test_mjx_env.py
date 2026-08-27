@@ -1257,6 +1257,63 @@ def test_realistic_mjx_env_jitted_rollout_and_cpu_diagnostics_match() -> None:
     np.testing.assert_array_equal(reset_state.step_count, np.array([0, 1]))
 
 
+def test_connector_ball_observations_match_between_native_mujoco_and_mjx() -> None:
+    config = TrussEnvConfig(
+        get_mujoco_spec("tetrahedron", realistic=True),
+        max_steps=2,
+        nsubsteps=1,
+        speed=0.01,
+        control_node_observation_source="connector_ball",
+    )
+    mjx_env = MjxNodeVelocityEnv(config)
+    cpu_env = MujocoNodeVelocityCommandEnv(config)
+    keys = _keys(23, batch_size=1)
+
+    try:
+        obs, state = jax.jit(mjx_env.reset)(keys)
+        cpu_env.mj_model.data = mjx.get_data(mjx_env.mujoco_model.model, state.data)[0]
+        np.testing.assert_allclose(obs[0], cpu_env._get_obs(), rtol=1e-5, atol=1e-6)
+
+        actions = jnp.linspace(-0.01, 0.01, mjx_env.action_size)[None, :]
+        obs, state, _, _, _ = jax.jit(mjx_env.step)(keys, state, actions)
+        cpu_env.mj_model.data = mjx.get_data(mjx_env.mujoco_model.model, state.data)[0]
+        cpu_env.node_velocity_controller.latest_node_commands = np.asarray(
+            state.node_commands[0]
+        )
+        np.testing.assert_allclose(obs[0], cpu_env._get_obs(), rtol=1e-5, atol=1e-6)
+
+        control_graph = mjx_env.mujoco_model.control_graph
+        by_logical_node: dict[str, list[int]] = {}
+        for index, control_node_name in enumerate(control_graph.control_node_names):
+            logical_node = control_graph.control_node_to_logical_node[control_node_name]
+            by_logical_node.setdefault(logical_node, []).append(index)
+        shared_indices = next(indices for indices in by_logical_node.values() if len(indices) > 1)
+
+        node_count = mjx_env.action_size
+        positions = np.asarray(obs[0, : 3 * node_count]).reshape(node_count, 3)
+        velocities = np.asarray(obs[0, 3 * node_count : 6 * node_count]).reshape(node_count, 3)
+        np.testing.assert_allclose(
+            positions[shared_indices],
+            np.repeat(positions[shared_indices[:1]], len(shared_indices), axis=0),
+        )
+        np.testing.assert_allclose(
+            velocities[shared_indices],
+            np.repeat(velocities[shared_indices[:1]], len(shared_indices), axis=0),
+        )
+    finally:
+        cpu_env.close()
+
+
+def test_mjx_connector_ball_observations_validate_missing_bodies_clearly() -> None:
+    with pytest.raises(ValueError, match="connector_ball.*realistic model"):
+        MjxNodeVelocityEnv(
+            TrussEnvConfig(
+                get_mujoco_spec("tetrahedron", realistic=False),
+                control_node_observation_source="connector_ball",
+            )
+        )
+
+
 def test_mjx_env_validates_leading_batch_shapes(compiled_env: CompiledEnv) -> None:
     env = compiled_env.env
     with pytest.raises(ValueError, match="leading batch dimension"):

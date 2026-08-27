@@ -29,7 +29,7 @@ from mujoco_truss_gen.mujoco_model.io_viewer import (
     view_node_velocity,
     view_node_velocity_terminal,
 )
-from mujoco_truss_gen.mujoco_model.model import MujocoModel
+from mujoco_truss_gen.mujoco_model.model import ControlNodeObservationSource, MujocoModel
 from mujoco_truss_gen.mujoco_model.presets import (
     HENNEBERG_PRESET_SPECS,
     HENNEBERG_PRESET_VARIANT_COUNTS,
@@ -64,6 +64,7 @@ from mujoco_truss_gen.mujoco_model.terrain_viewer import (
 __all__ = [
     "AccelerometerConfig",
     "DEFAULT_ACCELEROMETER_CONFIG",
+    "ControlNodeObservationSource",
     "MujocoModel",
     "NodeVelocityController",
     "PRESETS",

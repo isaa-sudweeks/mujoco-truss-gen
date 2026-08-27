@@ -10,7 +10,11 @@ import mujoco
 import numpy as np
 from gymnasium import spaces
 
-from mujoco_truss_gen.mujoco_model.model import ModelSource, MujocoModel
+from mujoco_truss_gen.mujoco_model.model import (
+    ControlNodeObservationSource,
+    ModelSource,
+    MujocoModel,
+)
 
 try:
     import mujoco.viewer as mujoco_viewer
@@ -84,6 +88,8 @@ class TrussEnvConfig:
     zero_rigidity_reward_on_termination: bool = True
     zero_velocity_shaping_on_termination: bool = True
     normalize_observations: bool = False
+    # Kinematic body used for each control node's [x, y, z, vx, vy, vz] observation.
+    control_node_observation_source: ControlNodeObservationSource = "physical_node"
 
 
 class MujocoTrussEnv(gym.Env):

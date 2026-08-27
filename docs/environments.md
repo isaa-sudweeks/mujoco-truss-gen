@@ -233,6 +233,27 @@ action[1] = 0.01
 obs, reward, terminated, truncated, info = env.step(action)
 ```
 
+For generated realistic models, control-node kinematics can instead come from
+the connector ball associated with each logical node:
+
+```python
+env = MujocoNodeVelocityCommandEnv(
+    TrussEnvConfig(
+        get_mujoco_spec("tetrahedron", realistic=True),
+        speed=0.01,
+        control_node_observation_source="connector_ball",
+    )
+)
+```
+
+The default, `"physical_node"`, preserves existing observations. With
+`"connector_ball"`, control-node identity, graph connectivity, action shape, and
+node-to-actuator routing are unchanged; only each node's position and linear
+velocity source changes. Control-node copies belonging to the same logical node
+therefore receive identical kinematics. The same `TrussEnvConfig` field is used
+by `MjxNodeVelocityEnv`. Selecting connector balls for a model that does not
+contain them raises a descriptive error during environment construction.
+
 ## Rewards
 
 The default reward combines center-of-mass forward velocity, alive bonus,

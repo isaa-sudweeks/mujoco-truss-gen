@@ -50,7 +50,7 @@ from mujoco_truss_gen.mujoco_model import (
     view_terrain,
     view_terrain_explorer,
 )
-from mujoco_truss_gen.mujoco_model.model import MujocoModel
+from mujoco_truss_gen.mujoco_model.model import ControlNodeObservationSource, MujocoModel
 from mujoco_truss_gen.node_velocity_command_env import MujocoNodeVelocityCommandEnv
 from mujoco_truss_gen.relative_observation_env import MujocoRelativeObsEnv
 from mujoco_truss_gen.velocity_command_env import MujocoVelocityCommandEnv
@@ -78,6 +78,7 @@ def __getattr__(name: str) -> Any:
 __all__ = [
     "AccelerometerConfig",
     "DEFAULT_ACCELEROMETER_CONFIG",
+    "ControlNodeObservationSource",
     "DomainRandomizationConfig",
     "MujocoModel",
     "MjxEnvState",

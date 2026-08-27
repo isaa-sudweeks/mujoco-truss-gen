@@ -47,8 +47,11 @@ class MujocoNodeVelocityCommandEnv(MujocoRelativeObsEnv):
         )
 
     def _get_obs(self) -> np.ndarray:
-        node_positions = self.mj_model.get_control_node_position_matrix()
-        node_velocities = self.mj_model.get_control_node_linear_velocity_matrix()
+        observation_source = self.config.control_node_observation_source
+        node_positions = self.mj_model.get_control_node_position_matrix(observation_source)
+        node_velocities = self.mj_model.get_control_node_linear_velocity_matrix(
+            observation_source
+        )
         if node_positions.size == 0 or node_velocities.size == 0:
             node_positions = self.mj_model.get_node_position_matrix()
             node_velocities = self.mj_model.get_node_linear_velocity_matrix()
