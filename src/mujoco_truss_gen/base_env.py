@@ -60,6 +60,7 @@ class DomainRandomizationConfig:
     initial_translation_y_range: Range | None = None
     initial_yaw_range: Range | None = None
     abstract_node_mass_multiplier_range: Range | None = None
+    hinge_position_kp_range: Range | None = None
 
 
 @dataclass(slots=True)
@@ -233,6 +234,10 @@ class MujocoTrussEnv(gym.Env):
             randomization.abstract_node_mass_multiplier_range,
             self.mj_model,
         )
+        _validate_hinge_position_kp_randomization(
+            randomization.hinge_position_kp_range,
+            self.mj_model,
+        )
 
         body_mass_multiplier = _sample_range(
             self.np_random,
@@ -311,6 +316,17 @@ class MujocoTrussEnv(gym.Env):
                 self._runtime_nominals["actuator_biasprm"] * actuator_bias_multiplier
             )
             samples["actuator_bias_multiplier"] = actuator_bias_multiplier
+
+        hinge_position_kp = _sample_range(
+            self.np_random,
+            randomization.hinge_position_kp_range,
+            "hinge_position_kp_range",
+        )
+        if hinge_position_kp is not None:
+            internal_ids = self.mj_model.internal_actuator_ids
+            model.actuator_gainprm[internal_ids, 0] = hinge_position_kp
+            model.actuator_biasprm[internal_ids, 1] = -hinge_position_kp
+            samples["hinge_position_kp"] = hinge_position_kp
 
         actuator_dynprm_multiplier = _sample_range(
             self.np_random,
@@ -736,6 +752,25 @@ def _validate_abstract_node_mass_randomization(
         raise ValueError(
             "abstract_node_mass_multiplier_range is only supported for abstract "
             "per-node slide-joint models."
+        )
+
+
+def _validate_hinge_position_kp_randomization(
+    value_range: Range | None,
+    model: MujocoModel,
+) -> None:
+    if value_range is None:
+        return
+
+    low, high = (float(value_range[0]), float(value_range[1]))
+    if not np.isfinite(low) or not np.isfinite(high) or low > high or low < 0.0:
+        raise ValueError(
+            "hinge_position_kp_range must contain finite, non-negative values "
+            "with low <= high."
+        )
+    if not model.internal_actuator_ids.size:
+        raise ValueError(
+            "hinge_position_kp_range requires connector-hinge position actuators."
         )
 
 

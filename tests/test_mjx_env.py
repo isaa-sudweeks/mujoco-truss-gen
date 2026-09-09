@@ -866,6 +866,61 @@ def test_warp_domain_randomization_is_independent_and_finite() -> None:
     assert env.buffer_diagnostics(state)["overflow"] is False
 
 
+@pytest.mark.cuda
+@pytest.mark.skipif(not CUDA_WARP_AVAILABLE, reason="CUDA Warp dependencies are unavailable")
+def test_warp_hinge_position_kp_is_per_world_and_finite() -> None:
+    batch_size = 4
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=True),
+            domain_randomization=DomainRandomizationConfig(
+                hinge_position_kp_range=(6.0, 8.0)
+            ),
+        ),
+        mjx_impl="warp",
+        warp_naconmax=128 * batch_size,
+        warp_njmax=256,
+    )
+    reset = jax.jit(env.reset)
+    step = jax.jit(env.step)
+    obs, state = reset(_keys(124, batch_size=batch_size))
+    hinge_kp = np.asarray(state.domain_randomization.hinge_position_kp)
+    assert np.unique(hinge_kp).size > 1
+
+    model = env._warp_model_for_domain_batch(state.domain_randomization)
+    internal_ids = env.mujoco_model.internal_actuator_ids
+    external_ids = env.mujoco_model.external_actuator_ids
+    np.testing.assert_allclose(model.actuator_gainprm[:, internal_ids, 0], hinge_kp[:, None])
+    np.testing.assert_allclose(model.actuator_biasprm[:, internal_ids, 1], -hinge_kp[:, None])
+    np.testing.assert_allclose(
+        model.actuator_gainprm[:, external_ids],
+        np.broadcast_to(
+            np.asarray(env.mjx_model.actuator_gainprm[external_ids]),
+            np.asarray(model.actuator_gainprm[:, external_ids]).shape,
+        ),
+    )
+    np.testing.assert_allclose(
+        model.actuator_biasprm[:, external_ids],
+        np.broadcast_to(
+            np.asarray(env.mjx_model.actuator_biasprm[external_ids]),
+            np.asarray(model.actuator_biasprm[:, external_ids]).shape,
+        ),
+    )
+
+    actions = jnp.zeros((batch_size, env.action_size), dtype=jnp.float32)
+    for step_index in range(5):
+        obs, state, reward, _, _ = step(
+            _keys(125 + step_index, batch_size=batch_size),
+            state,
+            actions,
+        )
+    assert np.all(np.isfinite(np.asarray(obs)))
+    assert np.all(np.isfinite(np.asarray(state.data.qpos)))
+    assert np.all(np.isfinite(np.asarray(state.data.ctrl)))
+    assert np.all(np.isfinite(np.asarray(reward)))
+    assert env.buffer_diagnostics(state)["overflow"] is False
+
+
 def test_mjx_domain_randomization_reset_is_deterministic_and_batched() -> None:
     env = MjxNodeVelocityEnv(
         TrussEnvConfig(
@@ -974,6 +1029,41 @@ def test_mjx_domain_randomization_reset_where_only_resamples_masked_elements() -
     assert not np.array_equal(
         np.asarray(state.domain_randomization.gravity_z[2]),
         np.asarray(merged.domain_randomization.gravity_z[2]),
+    )
+
+
+def test_mjx_hinge_position_kp_is_independent_deterministic_and_masked() -> None:
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=True),
+            domain_randomization=DomainRandomizationConfig(
+                hinge_position_kp_range=(6.0, 8.0)
+            ),
+        )
+    )
+    reset = jax.jit(env.reset)
+    reset_where = jax.jit(env.reset_where)
+
+    _, state = reset(_keys(34, batch_size=4))
+    _, repeated = reset(_keys(34, batch_size=4))
+    hinge_kp = np.asarray(state.domain_randomization.hinge_position_kp)
+    assert np.all((hinge_kp >= 6.0) & (hinge_kp <= 8.0))
+    assert np.unique(hinge_kp).size > 1
+    np.testing.assert_array_equal(
+        repeated.domain_randomization.hinge_position_kp,
+        state.domain_randomization.hinge_position_kp,
+    )
+
+    _, merged = reset_where(
+        _keys(35, batch_size=4),
+        state,
+        jnp.array([True, False, True, False]),
+    )
+    assert merged.domain_randomization.hinge_position_kp[0] != hinge_kp[0]
+    assert merged.domain_randomization.hinge_position_kp[2] != hinge_kp[2]
+    np.testing.assert_array_equal(
+        np.asarray(merged.domain_randomization.hinge_position_kp)[[1, 3]],
+        np.asarray(state.domain_randomization.hinge_position_kp)[[1, 3]],
     )
 
 
@@ -1174,6 +1264,104 @@ def test_mjx_independent_node_mass_patch_matches_cpu_setconst() -> None:
     assert np.all(np.isfinite(np.asarray(obs)))
     assert np.all(np.isfinite(np.asarray(state.data.qpos)))
     assert np.all(np.isfinite(np.asarray(reward)))
+
+
+def test_mjx_hinge_position_kp_patch_matches_native_and_preserves_external_actuators() -> None:
+    config = TrussEnvConfig(
+        get_mujoco_spec("tetrahedron", realistic=True),
+        domain_randomization=DomainRandomizationConfig(
+            actuator_gain_multiplier_range=(2.0, 2.0),
+            actuator_bias_multiplier_range=(3.0, 3.0),
+            hinge_position_kp_range=(7.0, 7.0),
+        ),
+    )
+    mjx_env = MjxNodeVelocityEnv(config)
+    native_env = MujocoNodeVelocityCommandEnv(config)
+    try:
+        _, native_info = native_env.reset(seed=11)
+        _, mjx_state = jax.jit(mjx_env.reset)(_keys(11, batch_size=1))
+        patched_model = mjx_env._model_for_domain(
+            jax.tree.map(lambda value: value[0], mjx_state.domain_randomization)
+        )
+        internal_ids = mjx_env.mujoco_model.internal_actuator_ids
+        external_ids = mjx_env.mujoco_model.external_actuator_ids
+
+        assert native_info["domain_randomization"]["hinge_position_kp"] == pytest.approx(7.0)
+        np.testing.assert_allclose(patched_model.actuator_gainprm[internal_ids, 0], 7.0)
+        np.testing.assert_allclose(patched_model.actuator_biasprm[internal_ids, 1], -7.0)
+        np.testing.assert_allclose(
+            patched_model.actuator_gainprm,
+            native_env.mj_model.model.actuator_gainprm,
+        )
+        np.testing.assert_allclose(
+            patched_model.actuator_biasprm,
+            native_env.mj_model.model.actuator_biasprm,
+        )
+        np.testing.assert_allclose(
+            patched_model.actuator_gainprm[external_ids],
+            mjx_env.mjx_model.actuator_gainprm[external_ids] * 2.0,
+        )
+        np.testing.assert_allclose(
+            patched_model.actuator_biasprm[external_ids],
+            mjx_env.mjx_model.actuator_biasprm[external_ids] * 3.0,
+        )
+    finally:
+        native_env.close()
+
+
+@pytest.mark.parametrize("hinge_kp", [6.0, 8.0])
+def test_mjx_hinge_position_kp_endpoint_rollout_is_jitted_and_finite(
+    hinge_kp: float,
+) -> None:
+    env = MjxNodeVelocityEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=True),
+            domain_randomization=DomainRandomizationConfig(
+                hinge_position_kp_range=(hinge_kp, hinge_kp)
+            ),
+        )
+    )
+    reset = jax.jit(env.reset)
+    step = jax.jit(env.step)
+    obs, state = reset(_keys(40, batch_size=2))
+    actions = jnp.zeros((2, env.action_size), dtype=jnp.float32)
+    obs, state, reward, _, _ = step(_keys(41, batch_size=2), state, actions)
+
+    np.testing.assert_allclose(state.domain_randomization.hinge_position_kp, hinge_kp)
+    assert np.all(np.isfinite(np.asarray(obs)))
+    assert np.all(np.isfinite(np.asarray(state.data.qpos)))
+    assert np.all(np.isfinite(np.asarray(state.data.ctrl)))
+    assert np.all(np.isfinite(np.asarray(reward)))
+
+
+@pytest.mark.parametrize(
+    "value_range",
+    [(-1.0, 1.0), (2.0, 1.0), (np.nan, 1.0), (0.0, np.inf)],
+)
+def test_mjx_hinge_position_kp_rejects_invalid_ranges(
+    value_range: tuple[float, float],
+) -> None:
+    with pytest.raises(ValueError, match="finite, non-negative"):
+        MjxNodeVelocityEnv(
+            TrussEnvConfig(
+                get_mujoco_spec("tetrahedron", realistic=True),
+                domain_randomization=DomainRandomizationConfig(
+                    hinge_position_kp_range=value_range
+                ),
+            )
+        )
+
+
+def test_mjx_hinge_position_kp_rejects_hinge_free_model() -> None:
+    with pytest.raises(ValueError, match="requires connector-hinge"):
+        MjxNodeVelocityEnv(
+            TrussEnvConfig(
+                get_mujoco_spec("tetrahedron", realistic=False),
+                domain_randomization=DomainRandomizationConfig(
+                    hinge_position_kp_range=(6.0, 8.0)
+                ),
+            )
+        )
 
 
 def test_mjx_independent_node_mass_preserves_nominal_dof_armature(tmp_path: Path) -> None:

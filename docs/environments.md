@@ -100,6 +100,7 @@ env = MujocoTrussEnv(
             dof_frictionloss_range=(0.0, 0.05),
             actuator_gain_multiplier_range=(0.75, 1.25),
             actuator_bias_multiplier_range=(0.75, 1.25),
+            hinge_position_kp_range=(35.0, 55.0),
             actuator_dynprm_multiplier_range=(0.75, 1.25),
             geom_friction_slide_range=(0.4, 1.2),
             geom_friction_torsional_range=(0.0001, 0.01),
@@ -131,6 +132,16 @@ multiplier. Other zero-default DOF and tendon fields use absolute sampled
 values. Runtime randomization intentionally
 does not change actuator control ranges, force ranges, action-space bounds, or
 the reset `qpos`/`qvel` perturbation.
+
+`hinge_position_kp_range` is an absolute, non-negative range for realistic
+connector-hinge position servos. One value is sampled per episode and applied
+to every internal angle-bisector, angular, and roll actuator as coupled MuJoCo
+position-servo coefficients: `actuator_gainprm[:, 0] = kp` and
+`actuator_biasprm[:, 1] = -kp`. External routed-tendon actuators are unchanged.
+If generic actuator gain or bias multipliers are also configured, they continue
+to apply globally first, after which the absolute hinge value overrides only
+the internal connector servos. The option is rejected for models without these
+connector-hinge actuators.
 
 For abstract models, `abstract_node_mass_multiplier_range` draws one strictly
 positive nominal-relative multiplier independently for every physical node:
@@ -351,12 +362,15 @@ model per instance. Realistic angle-bisector controls are evaluated as batched
 JAX operations before every MJX physics substep. Runtime
 `DomainRandomizationConfig` ranges are sampled independently per batched
 environment on reset and remain fixed for that episode; the sampled values are
-available on `state.domain_randomization`. Per-node mass multiplier vectors have
-shape `[batch_size, physical_node_count]`; `reset_where` resamples them only for
-masked batch elements. `model_factory`, other internal
-actuator types, rendering, and batches containing different model shapes are not
-supported. A different batch size can be used, but it causes JAX to compile a
-separate executable.
+available on `state.domain_randomization`. The sampled hinge gain is available
+as `state.domain_randomization.hinge_position_kp`; native environments report it
+as `info["domain_randomization"]["hinge_position_kp"]`. Per-node mass multiplier
+vectors have shape `[batch_size, physical_node_count]`; `reset_where` resamples
+them only for masked batch elements. Hinge-gain randomization patches
+fixed-shape actuator arrays and therefore does not rebuild or recompile the
+model. `model_factory`, other internal actuator types, rendering, and batches
+containing different model shapes are not supported. A different batch size
+can be used, but it causes JAX to compile a separate executable.
 
 MJX-JAX remains the default implementation. An MJX-Warp candidate is available
 for CUDA benchmarking without changing the batch-first API:
