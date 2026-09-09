@@ -47,7 +47,6 @@ class DomainRandomizationConfig:
     dof_frictionloss_range: Range | None = None
     actuator_gain_multiplier_range: Range | None = None
     actuator_bias_multiplier_range: Range | None = None
-    hinge_position_kp_range: Range | None = None
     actuator_dynprm_multiplier_range: Range | None = None
     geom_friction_slide_range: Range | None = None
     geom_friction_torsional_range: Range | None = None
@@ -61,6 +60,7 @@ class DomainRandomizationConfig:
     initial_translation_y_range: Range | None = None
     initial_yaw_range: Range | None = None
     abstract_node_mass_multiplier_range: Range | None = None
+    hinge_position_kp_range: Range | None = None
 
 
 @dataclass(slots=True)

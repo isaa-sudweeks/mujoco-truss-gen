@@ -1009,6 +1009,19 @@ def test_env_runtime_domain_randomization_restores_nominals_between_resets() -> 
         env.close()
 
 
+def test_domain_randomization_config_preserves_legacy_positional_field_order() -> None:
+    legacy_ranges = tuple((float(index), float(index)) for index in range(1, 21))
+    config = DomainRandomizationConfig(None, *legacy_ranges)
+
+    assert config.body_mass_multiplier_range == legacy_ranges[0]
+    assert config.actuator_dynprm_multiplier_range == legacy_ranges[7]
+    assert config.geom_friction_slide_range == legacy_ranges[8]
+    assert config.gravity_z_range == legacy_ranges[15]
+    assert config.initial_yaw_range == legacy_ranges[18]
+    assert config.abstract_node_mass_multiplier_range == legacy_ranges[19]
+    assert config.hinge_position_kp_range is None
+
+
 def test_hinge_position_kp_randomization_is_coupled_scoped_and_reproducible() -> None:
     env = MujocoTrussEnv(
         TrussEnvConfig(
