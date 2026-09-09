@@ -16,6 +16,7 @@ from mujoco_truss_gen.base_env import (
     TrussEnvConfig,
     _coerce_config,
     _is_abstract_node_model,
+    _validate_hinge_position_kp_randomization,
 )
 from mujoco_truss_gen.mjx_controllers import MjxAngleBisectorController
 from mujoco_truss_gen.mujoco_model.controllers import NodeVelocityController
@@ -90,6 +91,7 @@ class MjxDomainRandomizationState:
     dof_frictionloss: jax.Array
     actuator_gain_multiplier: jax.Array
     actuator_bias_multiplier: jax.Array
+    hinge_position_kp: jax.Array
     actuator_dynprm_multiplier: jax.Array
     geom_friction_slide: jax.Array
     geom_friction_torsional: jax.Array
@@ -190,6 +192,16 @@ class MjxNodeVelocityEnv:
                 "MjxNodeVelocityEnv does not support internal actuator(s) not owned by "
                 f"the angle-bisector controller: {', '.join(sorted(names))}."
             )
+        _validate_hinge_position_kp_randomization(
+            self._domain_randomization.hinge_position_kp_range
+            if self._domain_randomization is not None
+            else None,
+            self.mujoco_model,
+        )
+        self._hinge_actuator_ids = jnp.asarray(
+            self.mujoco_model.internal_actuator_ids,
+            dtype=jnp.int32,
+        )
 
         self._controller = NodeVelocityController(
             model,
@@ -254,6 +266,11 @@ class MjxNodeVelocityEnv:
         )
         self._actuator_bias_multiplier_range = self._jax_range(
             self._domain_randomization.actuator_bias_multiplier_range
+            if self._domain_randomization is not None
+            else None
+        )
+        self._hinge_position_kp_range = self._jax_range(
+            self._domain_randomization.hinge_position_kp_range
             if self._domain_randomization is not None
             else None
         )
@@ -1061,6 +1078,9 @@ class MjxNodeVelocityEnv:
             actuator_bias_multiplier=self._sample_jax_range(
                 keys[6], self._actuator_bias_multiplier_range, 1.0
             ),
+            hinge_position_kp=self._sample_jax_range(
+                jax.random.fold_in(key, 20), self._hinge_position_kp_range, 0.0
+            ),
             actuator_dynprm_multiplier=self._sample_jax_range(
                 keys[7], self._actuator_dynprm_multiplier_range, 1.0
             ),
@@ -1108,6 +1128,7 @@ class MjxNodeVelocityEnv:
             dof_frictionloss=jnp.asarray(0.0, dtype=dtype),
             actuator_gain_multiplier=jnp.asarray(1.0, dtype=dtype),
             actuator_bias_multiplier=jnp.asarray(1.0, dtype=dtype),
+            hinge_position_kp=jnp.asarray(0.0, dtype=dtype),
             actuator_dynprm_multiplier=jnp.asarray(1.0, dtype=dtype),
             geom_friction_slide=jnp.asarray(self.mjx_model.geom_friction[0, 0], dtype=dtype),
             geom_friction_torsional=jnp.asarray(self.mjx_model.geom_friction[0, 1], dtype=dtype),
@@ -1209,6 +1230,15 @@ class MjxNodeVelocityEnv:
         if self._actuator_bias_multiplier_range is not None:
             model = model.replace(
                 actuator_biasprm=model.actuator_biasprm * domain.actuator_bias_multiplier
+            )
+        if self._hinge_position_kp_range is not None:
+            model = model.replace(
+                actuator_gainprm=model.actuator_gainprm.at[
+                    self._hinge_actuator_ids, 0
+                ].set(domain.hinge_position_kp),
+                actuator_biasprm=model.actuator_biasprm.at[
+                    self._hinge_actuator_ids, 1
+                ].set(-domain.hinge_position_kp),
             )
         if self._actuator_dynprm_multiplier_range is not None:
             model = model.replace(

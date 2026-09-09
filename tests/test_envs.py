@@ -1009,6 +1009,107 @@ def test_env_runtime_domain_randomization_restores_nominals_between_resets() -> 
         env.close()
 
 
+def test_hinge_position_kp_randomization_is_coupled_scoped_and_reproducible() -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=True),
+            domain_randomization=DomainRandomizationConfig(
+                actuator_gain_multiplier_range=(2.0, 2.0),
+                actuator_bias_multiplier_range=(3.0, 3.0),
+                hinge_position_kp_range=(6.0, 8.0),
+            ),
+        )
+    )
+    try:
+        nominal_gain = env.mj_model.model.actuator_gainprm.copy()
+        nominal_bias = env.mj_model.model.actuator_biasprm.copy()
+        internal_ids = env.mj_model.internal_actuator_ids
+        external_ids = env.mj_model.external_actuator_ids
+        internal_names = set(env.mj_model.internal_actuator_names)
+
+        _, first_info = env.reset(seed=23)
+        first_kp = first_info["domain_randomization"]["hinge_position_kp"]
+        assert 6.0 <= first_kp <= 8.0
+        np.testing.assert_allclose(env.mj_model.model.actuator_gainprm[internal_ids, 0], first_kp)
+        np.testing.assert_allclose(env.mj_model.model.actuator_biasprm[internal_ids, 1], -first_kp)
+        np.testing.assert_allclose(
+            env.mj_model.model.actuator_gainprm[external_ids],
+            nominal_gain[external_ids] * 2.0,
+        )
+        np.testing.assert_allclose(
+            env.mj_model.model.actuator_biasprm[external_ids],
+            nominal_bias[external_ids] * 3.0,
+        )
+        assert any(name.startswith("bisector_act_") for name in internal_names)
+        assert any(name.startswith("bisector_angular_act_") for name in internal_names)
+        assert any(name.startswith("bisector_roll_act_") for name in internal_names)
+
+        _, repeated_info = env.reset(seed=23)
+        assert repeated_info["domain_randomization"]["hinge_position_kp"] == pytest.approx(
+            first_kp
+        )
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
+    "value_range",
+    [(-1.0, 1.0), (2.0, 1.0), (np.nan, 1.0), (0.0, np.inf)],
+)
+def test_hinge_position_kp_randomization_rejects_invalid_ranges(
+    value_range: tuple[float, float],
+) -> None:
+    env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=True),
+            domain_randomization=DomainRandomizationConfig(
+                hinge_position_kp_range=value_range
+            ),
+        )
+    )
+    try:
+        with pytest.raises(ValueError, match="finite, non-negative"):
+            env.reset(seed=1)
+    finally:
+        env.close()
+
+
+def test_hinge_position_kp_randomization_accepts_zero_and_rejects_hinge_free_model() -> None:
+    realistic_env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=True),
+            domain_randomization=DomainRandomizationConfig(
+                hinge_position_kp_range=(0.0, 0.0)
+            ),
+        )
+    )
+    try:
+        _, info = realistic_env.reset(seed=1)
+        assert info["domain_randomization"]["hinge_position_kp"] == pytest.approx(0.0)
+        np.testing.assert_allclose(
+            realistic_env.mj_model.model.actuator_gainprm[
+                realistic_env.mj_model.internal_actuator_ids, 0
+            ],
+            0.0,
+        )
+    finally:
+        realistic_env.close()
+
+    abstract_env = MujocoTrussEnv(
+        TrussEnvConfig(
+            get_mujoco_spec("tetrahedron", realistic=False),
+            domain_randomization=DomainRandomizationConfig(
+                hinge_position_kp_range=(6.0, 8.0)
+            ),
+        )
+    )
+    try:
+        with pytest.raises(ValueError, match="requires connector-hinge"):
+            abstract_env.reset(seed=1)
+    finally:
+        abstract_env.close()
+
+
 def test_abstract_node_mass_randomization_is_independent_composed_and_reproducible() -> None:
     env = MujocoTrussEnv(
         TrussEnvConfig(
