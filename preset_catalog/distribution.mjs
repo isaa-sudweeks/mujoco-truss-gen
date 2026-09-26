@@ -76,7 +76,8 @@ export function randomOrder(pool, limit, random) {
 }
 
 export function stratifiedRandomOrder(pool, strataOf, limit, random) {
-  const groups = groupBy(pool, strataOf).map((group) => shuffled(group, random));
+  // Shuffle the strata too, so a draw that stops partway through a round is not biased to small n.
+  const groups = shuffled(groupBy(pool, strataOf), random).map((group) => shuffled(group, random));
   return roundRobin(groups, limit, (queue) => queue.shift());
 }
 

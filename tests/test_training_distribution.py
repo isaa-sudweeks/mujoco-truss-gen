@@ -113,6 +113,9 @@ def test_browser_coverage_logic(small_data: dict[str, Any]) -> None:
     for order in result["orders"]:
         assert sorted(order) == pool
     assert sorted(result["sfpsFirst"]) == sorted(set(pool))
+    first_rounds = result["stratifiedFirstRounds"]
+    assert all(sorted(round_) == sorted(set(pool)) for round_ in first_rounds)
+    assert len({round_[0] for round_ in first_rounds}) > 1
 
     per_size: defaultdict[int, float] = defaultdict(float)
     for nodes, weight in zip(node_counts, result["perSizeWeights"], strict=True):

@@ -27,10 +27,14 @@ const second = seededRandom(3);
 const fps = farthestPointOrder(matrix, count, pool, limit);
 const sfps = stratifiedFarthestPointOrder(matrix, count, pool, strataOf, limit);
 const draws = [];
+const stratifiedDraws = [];
 const random = seededRandom(5);
 for (let draw = 0; draw < 20; draw += 1) {
-  draws.push(randomOrder(pool, limit, random), stratifiedRandomOrder(pool, strataOf, limit, random));
+  const stratified = stratifiedRandomOrder(pool, strataOf, limit, random);
+  draws.push(randomOrder(pool, limit, random), stratified);
+  stratifiedDraws.push(stratified);
 }
+const strataCount = new Set(pool.map(strataOf)).size;
 
 process.stdout.write(
   JSON.stringify({
@@ -40,7 +44,8 @@ process.stdout.write(
     fpsWorst: coverageCurve(matrix, count, fps, everyone, weights).worst,
     randomWorstMedian: randomBand(matrix, count, (rng) => randomOrder(pool, limit, rng), everyone, weights, "worst", 50, 1).median,
     orders: [fps, sfps, ...draws].map((order) => order.map((index) => presets[index].nodes)),
-    sfpsFirst: sfps.slice(0, new Set(pool.map(strataOf)).size).map(strataOf),
+    sfpsFirst: sfps.slice(0, strataCount).map(strataOf),
+    stratifiedFirstRounds: stratifiedDraws.map((order) => order.slice(0, strataCount).map(strataOf)),
     perSizeWeights: Array.from(targetWeights(presets, everyone, true)),
     yaml: splitYaml(presets, new Set(pool.slice(0, 3)), finalTest),
   }),

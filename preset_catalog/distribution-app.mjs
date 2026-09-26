@@ -16,7 +16,8 @@ import {
 } from "./distribution.mjs";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-const NODE_COUNTS = [4, 5, 6, 7, 8, 9, 12];
+// Stops in the --n0 … --n6 sequential ramp defined in distribution.css.
+const RAMP_STOPS = 7;
 const OCCUPANCY_COLUMNS = [
   { label: "1 tube", short: "1 tube", tubes: 1 },
   { label: "2 tubes", short: "2", tubes: 2 },
@@ -47,6 +48,7 @@ const STORAGE_KEY = "mujoco-truss-gen:training-picks";
 const response = await fetch("distribution-data.json");
 const data = await response.json();
 const presets = data.presets;
+const NODE_COUNTS = [...new Set(presets.map((preset) => preset.nodes))].sort((a, b) => a - b);
 const count = presets.length;
 const indexByName = new Map(presets.map((preset, index) => [preset.name, index]));
 const trainIndices = Object.values(data.split.groups).flat().map((name) => indexByName.get(name)).filter((index) => index !== undefined);
@@ -107,7 +109,7 @@ function hexToRgb(hex) {
 }
 
 function rampColor(fraction) {
-  const stops = NODE_COUNTS.map((_, index) => hexToRgb(cssVar(`--n${index}`)));
+  const stops = Array.from({ length: RAMP_STOPS }, (_, index) => hexToRgb(cssVar(`--n${index}`)));
   const position = Math.max(0, Math.min(1, fraction)) * (stops.length - 1);
   const lower = Math.floor(position);
   const upper = Math.min(stops.length - 1, lower + 1);
@@ -172,7 +174,12 @@ function colorOf(index) {
   if (state.colorBy === "member_type") return preset.member_type === "tube" ? "var(--series-1)" : "var(--series-2)";
   if (state.colorBy === "family") return FAMILY_COLORS[preset.family];
   if (state.colorBy === "wcri") return rampColor((wcriLogs[index] - wcriRange[0]) / (wcriRange[1] - wcriRange[0]));
-  return `var(--n${NODE_COUNTS.indexOf(preset.nodes)})`;
+  return nodeColor(preset.nodes);
+}
+
+function nodeColor(nodes) {
+  const index = NODE_COUNTS.indexOf(nodes);
+  return rampColor(NODE_COUNTS.length > 1 ? index / (NODE_COUNTS.length - 1) : 0);
 }
 
 function markerPath(x, y, radius, memberType) {
@@ -299,7 +306,7 @@ function renderLegend() {
   legend.replaceChildren();
   const dot = (color) => (mark) => svg("circle", { r: 4.5, style: `fill:${color}` }, mark);
   if (state.colorBy === "nodes") {
-    NODE_COUNTS.forEach((nodes, index) => legendKey(legend, dot(`var(--n${index})`), `n = ${nodes}`));
+    NODE_COUNTS.forEach((nodes) => legendKey(legend, dot(nodeColor(nodes)), `n = ${nodes}`));
   } else if (state.colorBy === "member_type") {
     legendKey(legend, dot("var(--series-1)"), "Tube");
     legendKey(legend, dot("var(--series-2)"), "Triangle");
@@ -308,7 +315,7 @@ function renderLegend() {
   } else {
     const ramp = node("span", "ramp");
     const bar = node("span", "ramp-bar");
-    bar.style.background = `linear-gradient(90deg, ${NODE_COUNTS.map((_, index) => `var(--n${index})`).join(",")})`;
+    bar.style.background = `linear-gradient(90deg, ${Array.from({ length: RAMP_STOPS }, (_, index) => `var(--n${index})`).join(",")})`;
     ramp.append(node("span", "", powerLabel(wcriRange[0])), bar, node("span", "", `${powerLabel(wcriRange[1])} WCRI`));
     legend.append(ramp);
   }
@@ -384,7 +391,7 @@ const occupancyChart = {
         let fill = "transparent";
         if (available > 0) {
           const fraction = Math.log(available + 1) / Math.log(occupancyMax + 1);
-          fill = cssVar(`--n${Math.round(fraction * (NODE_COUNTS.length - 1))}`);
+          fill = cssVar(`--n${Math.round(fraction * (RAMP_STOPS - 1))}`);
           svg("rect", { ...box, style: `fill:${fill}` }, group);
         } else {
           svg("rect", { ...box, style: "fill:var(--grid)" }, group);
