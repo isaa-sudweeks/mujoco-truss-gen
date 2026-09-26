@@ -8,6 +8,7 @@ import {
   farthestPointOrder,
   randomBand,
   randomOrder,
+  searchPresets,
   spearman,
   splitYaml,
   stratifiedFarthestPointOrder,
@@ -44,6 +45,8 @@ const DESCRIPTOR_NAMES = {
   aspect_ratio: "aspect ratio",
 };
 const STORAGE_KEY = "mujoco-truss-gen:training-picks";
+// Above this many search matches, plots only dim the rest: per-robot rings would be clutter.
+const RING_LIMIT = 40;
 
 const response = await fetch("distribution-data.json");
 const data = await response.json();
@@ -68,6 +71,7 @@ const state = {
   cellFilter: null,
   brushed: null,
   brushBox: null,
+  search: null,
   picks: loadPicks(),
   metric: "worst",
   target: "pool",
@@ -190,8 +194,48 @@ function markerPath(x, y, radius, memberType) {
   return `M${x - radius},${y}a${radius},${radius} 0 1,0 ${radius * 2},0a${radius},${radius} 0 1,0 ${-radius * 2},0`;
 }
 
+let intersection = { search: null, filter: null, value: null };
+
+/** Robots passing both the search and the cell filter or brush; either alone if only one is set. */
+function filteredSet() {
+  const filter = state.cellFilter ?? state.brushed;
+  if (!state.search || !filter) return state.search ?? filter;
+  if (intersection.search !== state.search || intersection.filter !== filter) {
+    intersection = { search: state.search, filter, value: new Set([...filter].filter((index) => state.search.has(index))) };
+  }
+  return intersection.value;
+}
+
 function activeSet() {
-  return state.hoverCell ?? state.cellFilter ?? state.brushed;
+  return state.hoverCell ?? filteredSet();
+}
+
+/** Brushed robots that are still visible under the search. */
+function brushedVisible() {
+  if (!state.brushed) return [];
+  return [...state.brushed].filter((index) => !state.search || state.search.has(index));
+}
+
+/**
+ * Redraw a few search matches on top of a scatter plot with a ring, so they are not buried under
+ * other marks. Skipped above RING_LIMIT, and when nothing it depends on changed since the last draw.
+ */
+function drawSearchLayer(layer, positions, drawMark, ringRadius) {
+  const active = activeSet();
+  const key = [state.search, active, state.colorBy];
+  if (layer.searchKey?.every((value, position) => value === key[position])) return;
+  layer.searchKey = key;
+  layer.replaceChildren();
+  if (!state.search || state.search.size > RING_LIMIT) return;
+  for (const index of state.search) {
+    const position = positions[index];
+    if (!position) continue;
+    const group = svg("g", {}, layer);
+    if (active && !active.has(index)) group.classList.add("dim");
+    svg("circle", { cx: position[0], cy: position[1], r: ringRadius, class: "search-halo" }, group);
+    drawMark(group, index, position);
+    svg("circle", { cx: position[0], cy: position[1], r: ringRadius, class: "search-ring" }, group);
+  }
 }
 
 function pickable(index) {
@@ -335,7 +379,7 @@ function renderPickControls() {
   document.getElementById("clear-picks").disabled = size === 0;
   document.getElementById("copy-yaml").disabled = size === 0;
   const brushButton = document.getElementById("add-brushed");
-  const brushable = state.brushed ? [...state.brushed].filter(pickable).length : 0;
+  const brushable = brushedVisible().filter(pickable).length;
   brushButton.hidden = brushable === 0;
   brushButton.textContent = `Add ${brushable} brushed`;
 }
@@ -379,6 +423,8 @@ const occupancyChart = {
       text(root, labelWidth + (col + 0.5) * cellWidth, 19, cellWidth < 72 ? column.short : column.label, { "text-anchor": "middle", class: "strong" });
     });
     this.cells = [];
+    // Cells are rebuilt below, so the one under the pointer will never see its pointerleave.
+    state.hoverCell = null;
     NODE_COUNTS.forEach((nodes, rowIndex) => {
       const y = headerHeight + rowIndex * cellHeight;
       text(root, 8, y + cellHeight / 2 + (nodes === HELD_OUT_NODE_COUNT ? -2 : 4), `n = ${nodes}`, { class: "strong" });
@@ -432,6 +478,17 @@ const occupancyChart = {
             });
           }
         }
+        if (state.search) {
+          const hits = [...cell.members].filter((index) => state.search.has(index)).length;
+          if (hits) {
+            svg("rect", { x: box.x + 2.5, y: box.y + 2.5, width: box.width - 5, height: box.height - 5, rx: 4, class: "search-ring", style: "stroke-width:2.5" }, group);
+            const badgeWidth = 7 + 6 * String(hits).length;
+            svg("rect", { x: box.x + box.width - badgeWidth - 3, y: box.y + 3, width: badgeWidth, height: 13, rx: 6.5, class: "search-badge" }, group);
+            text(group, box.x + box.width - badgeWidth / 2 - 3, box.y + 13, String(hits), { "text-anchor": "middle", class: "search-badge-text" });
+          } else {
+            group.style.opacity = ".35";
+          }
+        }
         if (state.cellFilter === cell.members) {
           svg("rect", { ...box, style: "fill:none;stroke:var(--ink);stroke-width:2" }, group);
         }
@@ -446,6 +503,7 @@ function occupancyTooltip(element, cell) {
   element.append(node("strong", "", `n = ${cell.nodes}, ${heading}`));
   row(element, "In library", cell.members.size);
   row(element, "In current split", cell.inSplit);
+  if (state.search) row(element, "Search matches", [...cell.members].filter((index) => state.search.has(index)).length);
   if (cell.gap) row(element, "Missing graphs", `${cell.gap.missing} (${cell.gap.reason})`);
   if (cell.members.size) element.append(node("div", "muted", state.cellFilter === cell.members ? "Click to clear the filter" : "Click to filter the other plots"));
 }
@@ -482,6 +540,8 @@ const mapChart = {
       if (state.picks.has(index)) svg("circle", { cx: x, cy: y, r: trainSet.has(index) ? 11 : 8, style: "fill:none;stroke:var(--accent);stroke-width:2.4" }, group);
       this.marks.set(index, group);
     }
+    this.width = width;
+    this.searchLayer = svg("g", { style: "pointer-events:none" }, root);
     this.hover = svg("circle", { r: 10, style: "fill:none;stroke:var(--ink);stroke-width:2;pointer-events:none", visibility: "hidden" }, root);
     root.addEventListener("pointermove", (event) => setHovered(nearest(positions, svgPoint(root, event), 16), event));
     root.addEventListener("pointerleave", () => setHovered(null));
@@ -500,6 +560,12 @@ const mapChart = {
   emphasize(active) {
     if (!this.marks) return;
     for (const [index, group] of this.marks) group.classList.toggle("dim", Boolean(active) && !active.has(index));
+    drawSearchLayer(this.searchLayer, this.positions, (group, index, [x, y]) => {
+      svg("path", { d: markerPath(x, y, 4.3, presets[index].member_type), style: `fill:${colorOf(index)};stroke:var(--surface-strong);stroke-width:1.5` }, group);
+      if (state.search.size !== 1) return;
+      const right = x < this.width * 0.62;
+      text(group, x + (right ? 20 : -20), y + 4, presets[index].name, { "text-anchor": right ? "start" : "end", class: "search-label" });
+    }, 15);
     placeHover(this.hover, state.hovered === null ? null : this.positions[state.hovered]);
   },
 };
@@ -599,6 +665,7 @@ const matrixChart = {
     this.panels = [];
     this.hovers = [];
     this.pointMarks = [];
+    this.searchLayers = [];
 
     for (let rowIndex = 0; rowIndex < count_; rowIndex += 1) {
       for (let col = 0; col < count_; col += 1) {
@@ -627,6 +694,7 @@ const matrixChart = {
             this.pointMarks.push([index, mark]);
           }
           this.panels.push({ x0, y0, width: panelWidth, height: panelHeight, positions });
+          this.searchLayers.push([svg("g", { style: "pointer-events:none" }, panel), positions]);
           this.hovers.push([svg("circle", { r: 6, style: "fill:none;stroke:var(--ink);stroke-width:1.8;pointer-events:none", visibility: "hidden" }, panel), positions]);
         } else {
           drawCorrelation(panel, correlations[rowIndex][col], x0, y0, panelWidth, panelHeight);
@@ -718,6 +786,9 @@ const matrixChart = {
     if (!this.pointMarks) return;
     this.drawBrushBox();
     for (const [index, mark] of this.pointMarks) mark.classList.toggle("dim", Boolean(active) && !active.has(index));
+    for (const [layer, positions] of this.searchLayers) {
+      drawSearchLayer(layer, positions, (group, index, [x, y]) => svg("circle", { cx: x, cy: y, r: 2.6, style: `fill:${colorOf(index)}` }, group), 5.5);
+    }
     for (const [hover, positions] of this.hovers) placeHover(hover, state.hovered === null ? null : positions[state.hovered]);
   },
 };
@@ -861,6 +932,7 @@ const coverageChart = {
       svg("path", { d, style: `fill:none;stroke:${line.color};stroke-width:2;stroke-linejoin:round;stroke-linecap:round${line.dash ? `;stroke-dasharray:${line.dash}` : ""}` }, root);
     }
     drawEndLabels(root, series.lines, sx(series.limit), sy, margin.top, plotBottom);
+    drawSearchJoins(root, series, sx, sy);
 
     const markers = [
       series.current && { ...series.current, label: `Current split (${series.current.k})`, style: "fill:var(--surface-strong);stroke:var(--ink);stroke-width:2" },
@@ -900,6 +972,50 @@ const coverageChart = {
   },
 };
 
+/** Mark the k at which each search match joins the two farthest-point orders, and say so below the chart. */
+function drawSearchJoins(parent, series, sx, sy) {
+  const note = document.getElementById("coverage-search");
+  note.hidden = !state.search;
+  if (!state.search) return;
+  const orders = [
+    { order: cachedOrder("fps"), line: series.lines[0], label: "farthest-point" },
+    { order: cachedOrder("sfps"), line: series.lines[1], label: "stratified farthest-point" },
+  ];
+  note.replaceChildren();
+  if (!state.search.size) {
+    note.append("No robots match the search.");
+    return;
+  }
+  const joins = orders.map(({ order }) => [...state.search].map((index) => order.indexOf(index) + 1).filter((k) => k > 0 && k <= series.limit));
+  if (state.search.size <= RING_LIMIT) {
+    orders.forEach(({ line }, position) => {
+      for (const k of joins[position]) {
+        const [x, y] = [sx(k), sy(line.values[k - 1])];
+        svg("circle", { cx: x, cy: y, r: 6.5, class: "search-halo" }, parent);
+        svg("circle", { cx: x, cy: y, r: 4.5, style: "fill:var(--highlight);stroke:var(--surface-strong);stroke-width:1.5" }, parent);
+      }
+    });
+  }
+
+  const strong = (content) => node("strong", "", content);
+  if (state.search.size === 1) {
+    const [index] = state.search;
+    note.append(strong(presets[index].name), ": ");
+    if (!pickable(index)) {
+      note.append("held out (n = 7), so no strategy ever picks it.");
+      return;
+    }
+    const phrases = orders.map(({ label }, position) => (joins[position].length ? `${label} adds it at k = ${joins[position][0]}` : `${label} doesn’t add it by k = ${series.limit}`));
+    note.append(`${phrases.join("; ")}.`);
+    if (joins.some((ks) => ks.length)) note.append(" The pink dots mark those points.");
+    return;
+  }
+  const inPool = [...state.search].filter(pickable).length;
+  const summary = orders.map(({ label }, position) => `${joins[position].length} join${joins[position].length === 1 ? "s" : ""} ${label} by k = ${series.limit}`).join(", ");
+  note.append(strong(`${state.search.size} matches`), ` (${inPool} pickable): ${summary}.`);
+  note.append(state.search.size <= RING_LIMIT ? " The pink dots mark where each one is added." : ` Narrow the search to ${RING_LIMIT} or fewer to mark them.`);
+}
+
 function drawEndLabels(parent, lines, x, sy, top, bottom) {
   const labels = lines.map((line) => ({ line, anchor: sy(line.values.at(-1)) })).sort((a, b) => a.anchor - b.anchor);
   const spacing = 15;
@@ -938,7 +1054,8 @@ function renderTable() {
   }
   head.append(headRow);
   const body = node("tbody");
-  const sorted = presets.map((_, index) => index).sort((a, b) => {
+  const shown = presets.map((_, index) => index).filter((index) => !state.search || state.search.has(index));
+  const sorted = shown.sort((a, b) => {
     const [x, y] = [presets[a][tableSort.key], presets[b][tableSort.key]];
     const order = typeof x === "string" ? x.localeCompare(y) : x - y;
     return (tableSort.ascending ? order : -order) || presets[a].name.localeCompare(presets[b].name);
@@ -952,6 +1069,9 @@ function renderTable() {
     body.append(tr);
   }
   table.replaceChildren(head, body);
+  const summary = document.getElementById("table-summary");
+  if (!state.search) summary.textContent = "All robots as a table";
+  else summary.textContent = `${sorted.length} matching robot${sorted.length === 1 ? "" : "s"} as a table`;
 }
 
 // ---------- orchestration ----------
@@ -1016,7 +1136,7 @@ document.getElementById("clear-picks").addEventListener("click", () => {
   picksChanged();
 });
 document.getElementById("add-brushed").addEventListener("click", () => {
-  for (const index of state.brushed ?? []) if (pickable(index)) state.picks.add(index);
+  for (const index of brushedVisible()) if (pickable(index)) state.picks.add(index);
   picksChanged();
 });
 document.getElementById("copy-yaml").addEventListener("click", async (event) => {
@@ -1034,6 +1154,34 @@ document.getElementById("copy-yaml").addEventListener("click", async (event) => 
     area.remove();
   }
   setTimeout(() => (button.textContent = "Copy YAML"), 1600);
+});
+const searchInput = document.getElementById("search");
+const searchStatus = document.getElementById("search-status");
+document.getElementById("robot-names").append(
+  ...presets.map((preset) => preset.name).sort().map((name) => Object.assign(document.createElement("option"), { value: name })),
+);
+
+function searchChanged() {
+  const query = searchInput.value;
+  const matches = searchPresets(presets, query);
+  // An empty set (no match) dims everything, rather than silently showing every robot.
+  state.search = query.trim() ? new Set(matches) : null;
+  searchStatus.textContent = !query.trim() ? "" : matches.length ? `${matches.length} match${matches.length === 1 ? "" : "es"}` : "No match";
+  searchStatus.classList.toggle("empty", Boolean(query.trim()) && !matches.length);
+  render(["occupancy", "coverage"]);
+  renderTable();
+  renderPickControls();
+  emphasize();
+}
+
+searchInput.addEventListener("input", searchChanged);
+searchInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !searchInput.value) return;
+  // Esc in a non-empty search clears just the search, not the brush or cell filter.
+  event.preventDefault();
+  event.stopPropagation();
+  searchInput.value = "";
+  searchChanged();
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
@@ -1069,3 +1217,4 @@ renderPickControls();
 render();
 renderTable();
 for (const chart of Object.values(charts)) resizeObserver.observe(chart.element);
+if (searchInput.value) searchChanged();

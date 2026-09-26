@@ -4,6 +4,7 @@ import {
   farthestPointOrder,
   randomBand,
   randomOrder,
+  searchPresets,
   seededRandom,
   splitYaml,
   stratifiedFarthestPointOrder,
@@ -48,5 +49,11 @@ process.stdout.write(
     stratifiedFirstRounds: stratifiedDraws.map((order) => order.slice(0, strataCount).map(strataOf)),
     perSizeWeights: Array.from(targetWeights(presets, everyone, true)),
     yaml: splitYaml(presets, new Set(pool.slice(0, 3)), finalTest),
+    search: Object.fromEntries(
+      ["", "  ", "octahedron", "OCTA", "n6", "n6 triangle", "henneberg_n5_1tube_1", "usevitch", "tube n7", "zzz"].map((query) => [
+        query,
+        searchPresets(presets, query).map((index) => presets[index].name),
+      ]),
+    ),
   }),
 );

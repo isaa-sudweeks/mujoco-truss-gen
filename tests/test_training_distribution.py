@@ -90,7 +90,10 @@ def test_browser_coverage_logic(small_data: dict[str, Any]) -> None:
 
     payload = {
         "distances": small_data["bases"]["graph"]["distances"],
-        "presets": [{"name": p["name"], "nodes": p["nodes"]} for p in small_data["presets"]],
+        "presets": [
+            {key: p[key] for key in ("name", "nodes", "family", "member_type")}
+            for p in small_data["presets"]
+        ],
         "finalTest": ["henneberg_n7_1tube_3", "usevitch_1514879"],
     }
     completed = subprocess.run(
@@ -126,6 +129,19 @@ def test_browser_coverage_logic(small_data: dict[str, Any]) -> None:
     for fragment in ("cross_validation:", "  groups:", "  final_test:", "    - usevitch_1514879"):
         assert fragment in yaml
     assert "node_7" not in yaml
+
+    search = result["search"]
+    presets = _by_name(small_data)
+    assert search[""] == search["  "] == []
+    assert search["octahedron"] == search["OCTA"] == ["octahedron"]
+    assert search["n6"] == [name for name, p in presets.items() if p["nodes"] == 6]
+    assert search["n6 triangle"] == ["octahedron"]
+    # An exact name matches only itself, even when it is a prefix of other names.
+    assert search["henneberg_n5_1tube_1"] == ["henneberg_n5_1tube_1"]
+    assert set(search["usevitch"]) == {n for n, p in presets.items() if p["family"] == "Usevitch"}
+    n7_tubes = [n for n, p in presets.items() if p["nodes"] == 7 and p["member_type"] == "tube"]
+    assert search["tube n7"] == n7_tubes
+    assert search["zzz"] == []
 
 
 def test_committed_data_matches_catalog() -> None:
