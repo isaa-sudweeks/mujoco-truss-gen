@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Choose robot topologies that cover the mujoco-truss-gen preset space.">
+  <title>Training distribution · mujoco-truss-gen</title>
+  <link rel="stylesheet" href="distribution.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./">mujoco-truss-gen</a>
+    <nav aria-label="Primary navigation">
+      <a href="./">Preset catalog</a>
+      <a href="distribution.html" aria-current="page">Training distribution</a>
+      <a href="terrain.html">Terrain explorer</a>
+      <a href="https://github.com/isaa-sudweeks/mujoco-truss-gen">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="intro">
+      <p class="eyebrow">Topology coverage</p>
+      <h1>Robot training distribution</h1>
+      <p class="lede">Which presets should a generalist controller train on? Hover a robot to find it in every plot. Click it to add it to your picks.</p>
+    </section>
+
+    <div class="toolbar" role="toolbar" aria-label="Shared plot controls">
+      <label class="control">
+        <span>Color</span>
+        <select id="color-by">
+          <option value="nodes">Node count</option>
+          <option value="member_type">Member type</option>
+          <option value="family">Family</option>
+          <option value="wcri">Rigidity (WCRI)</option>
+        </select>
+      </label>
+      <div class="control" role="radiogroup" aria-label="Distance">
+        <span>Distance</span>
+        <div class="segmented" id="basis">
+          <button type="button" data-value="graph" aria-pressed="true">Graph structure</button>
+          <button type="button" data-value="descriptors" aria-pressed="false">Descriptors</button>
+        </div>
+      </div>
+      <div class="legend" id="legend" aria-label="Legend"></div>
+      <div class="picks">
+        <span id="pick-count">0 picks</span>
+        <button type="button" id="add-brushed" class="quiet-button" hidden>Add brushed</button>
+        <button type="button" id="clear-picks" class="quiet-button">Clear</button>
+        <button type="button" id="copy-yaml" class="primary-button">Copy YAML</button>
+      </div>
+    </div>
+
+    <div class="plots">
+      <section class="card" id="occupancy-card" aria-labelledby="occupancy-title">
+        <h2 id="occupancy-title"><span class="step">1</span>Occupancy</h2>
+        <dl class="about">
+          <dt>Shows</dt><dd>Robots per node count and member type. Each cell reads <em>in current split / in library</em>.</dd>
+          <dt>Look for</dt><dd>Thin rows and empty or hatched cells that no split can cover.</dd>
+        </dl>
+        <div class="chart" id="occupancy"></div>
+        <p class="note">Hatched: Henneberg graphs with no preset. “–”: not enumerated beyond 8 nodes.</p>
+      </section>
+
+      <section class="card" id="map-card" aria-labelledby="map-title">
+        <h2 id="map-title"><span class="step">2</span>Topology map</h2>
+        <dl class="about">
+          <dt>Shows</dt><dd>Every robot placed by similarity (classical MDS); nearby robots are similar. The axes have no units.</dd>
+          <dt>Look for</dt><dd>Clusters, and regions that no training robot sits near.</dd>
+        </dl>
+        <div class="chart" id="map"></div>
+        <p class="note" id="map-note"></p>
+      </section>
+
+      <section class="card wide" id="matrix-card" aria-labelledby="matrix-title">
+        <h2 id="matrix-title"><span class="step">3</span>Descriptor matrix</h2>
+        <dl class="about">
+          <dt>Shows</dt><dd>Descriptor pairs, with Spearman ρ over all robots and within n = 8 above the diagonal.</dd>
+          <dt>Look for</dt><dd>Descriptors that still vary within n = 8: real axes beyond size. Drag in a panel to select robots; Esc clears.</dd>
+        </dl>
+        <div class="chart" id="matrix"></div>
+        <details class="glossary">
+          <summary>Descriptor definitions</summary>
+          <dl>
+            <dt>Degree spread</dt><dd>Standard deviation of node degree. Mean degree is fixed by n because every preset has 3n − 6 edges.</dd>
+            <dt>Triangles / node</dt><dd>Number of 3-cycles in the graph, divided by node count.</dd>
+            <dt>Symmetry</dt><dd>log₂ of the graph automorphism count.</dd>
+            <dt>WCRI</dt><dd>Initial worst-case rigidity index, on a log scale. Values below 10⁻⁶ (numerically flexible poses) are drawn at 10⁻⁶.</dd>
+            <dt>Resting faces</dt><dd>Convex-hull faces the robot can rest on stably (center of mass inside the face).</dd>
+          </dl>
+        </details>
+      </section>
+
+      <section class="card wide" id="coverage-card" aria-labelledby="coverage-title">
+        <h2 id="coverage-title"><span class="step">4</span>Coverage</h2>
+        <dl class="about">
+          <dt>Shows</dt><dd>Distance from robots to their nearest training robot as the training set grows. n = 7 is never picked.</dd>
+          <dt>Look for</dt><dd>How far deliberate picks beat random, and where the curve flattens.</dd>
+        </dl>
+        <div class="card-controls">
+          <div class="segmented" id="metric" role="radiogroup" aria-label="Metric">
+            <button type="button" data-value="worst" aria-pressed="true">Worst case</button>
+            <button type="button" data-value="mean" aria-pressed="false">Mean</button>
+          </div>
+          <div class="segmented" id="target" role="radiogroup" aria-label="Measured on">
+            <button type="button" data-value="pool" aria-pressed="true">Train pool (n ≠ 7)</button>
+            <button type="button" data-value="held" aria-pressed="false">Held-out n = 7</button>
+          </div>
+          <div class="segmented" id="weighting" role="radiogroup" aria-label="Mean weighting">
+            <button type="button" data-value="robot" aria-pressed="true">Per robot</button>
+            <button type="button" data-value="size" aria-pressed="false">Per node count</button>
+          </div>
+          <label class="slider">
+            <span>k = <output id="k-value">12</output></span>
+            <input id="k" type="range" min="1" max="64" step="1" value="12">
+          </label>
+          <button type="button" id="load-picks" class="quiet-button">Load stratified farthest-point picks</button>
+        </div>
+        <div class="chart" id="coverage"></div>
+        <p class="note">Farthest-point greedily minimizes the worst case, so it wins that metric partly by construction. Weighting changes only the mean.</p>
+      </section>
+    </div>
+
+    <details class="table-view">
+      <summary>All robots as a table</summary>
+      <div class="table-wrap"><table id="table"></table></div>
+    </details>
+  </main>
+
+  <div class="tooltip" id="tooltip" role="status" hidden></div>
+  <footer>Data from <code>tools/build_training_distribution.py</code>. Current split: GNN-SAC <code>node_count_loso</code>.</footer>
+  <script type="module" src="distribution-app.mjs"></script>
+</body>
+</html>
