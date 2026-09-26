@@ -22,7 +22,7 @@
     <section class="intro">
       <p class="eyebrow">Topology coverage</p>
       <h1>Robot training distribution</h1>
-      <p class="lede">Which presets should a generalist controller train on? Hover a robot to find it in every plot. Click it to add it to your picks.</p>
+      <p class="lede">Which presets should a generalist controller train on? Hover a robot, or search for one by name, to find it in every plot. Click it to add it to your picks.</p>
     </section>
 
     <div class="toolbar" role="toolbar" aria-label="Shared plot controls">
@@ -41,6 +41,12 @@
           <button type="button" data-value="graph" aria-pressed="true">Graph structure</button>
           <button type="button" data-value="descriptors" aria-pressed="false">Descriptors</button>
         </div>
+      </div>
+      <div class="control search" role="search">
+        <label for="search">Find</label>
+        <input id="search" type="search" list="robot-names" placeholder="e.g. henneberg_n8_2tube_5 or n6 triangle" autocomplete="off" spellcheck="false">
+        <datalist id="robot-names"></datalist>
+        <span class="search-status" id="search-status" role="status"></span>
       </div>
       <div class="legend" id="legend" aria-label="Legend"></div>
       <div class="picks">
@@ -117,12 +123,13 @@
           <button type="button" id="load-picks" class="quiet-button">Load stratified farthest-point picks</button>
         </div>
         <div class="chart" id="coverage"></div>
+        <p class="note search-note" id="coverage-search" hidden></p>
         <p class="note">Farthest-point greedily minimizes the worst case, so it wins that metric partly by construction. Weighting changes only the mean.</p>
       </section>
     </div>
 
     <details class="table-view">
-      <summary>All robots as a table</summary>
+      <summary id="table-summary">All robots as a table</summary>
       <div class="table-wrap"><table id="table"></table></div>
     </details>
   </main>

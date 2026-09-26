@@ -244,3 +244,28 @@ export function splitYaml(presets, picks, finalTest, name = "custom_picks") {
   lines.push("  held_out_group: null", "");
   return lines.join("\n");
 }
+
+/** Words a preset can be found by: its name, family, and member type. */
+function searchText(preset) {
+  return [preset.name, preset.family, preset.member_type].filter(Boolean).join(" ").toLowerCase();
+}
+
+/**
+ * Indices of presets matching every whitespace-separated token of `query`. A token like "n8"
+ * matches that exact node count; any other token matches a substring of the name, family, or
+ * member type. A query that is exactly one preset's name matches only that preset.
+ */
+export function searchPresets(presets, query) {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return [];
+  const exact = presets.findIndex((preset) => preset.name.toLowerCase() === normalized);
+  if (exact !== -1) return [exact];
+  const tests = normalized.split(/\s+/).map((token) => {
+    const nodes = token.match(/^n(\d+)$/);
+    return nodes ? (preset) => preset.nodes === Number(nodes[1]) : (preset, haystack) => haystack.includes(token);
+  });
+  return presets.flatMap((preset, index) => {
+    const haystack = searchText(preset);
+    return tests.every((test) => test(preset, haystack)) ? [index] : [];
+  });
+}
