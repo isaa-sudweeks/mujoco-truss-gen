@@ -184,7 +184,7 @@ input,select {{ padding:.7rem .85rem; background:#20242d; color:inherit; border:
 p {{ margin:.35rem 0; color:#c1c9d6; font-size:.88rem }} .rank {{ color:#72d6a1; font-weight:700 }}
 .family {{ color:#8da2c4 }} code {{ color:#f4c36b }} .failed {{ border-color:#8f3e48 }} pre {{ white-space:pre-wrap; color:#ff9da8 }}
 </style></head><body><header><div class="topline"><h1>MuJoCo truss preset catalog</h1>
-<nav class="site-nav" aria-label="Primary navigation"><a href="terrain.html">Terrain explorer</a><a href="https://github.com/isaa-sudweeks/mujoco-truss-gen">GitHub</a></nav></div>
+<nav class="site-nav" aria-label="Primary navigation"><a href="distribution.html">Training distribution</a><a href="terrain.html">Terrain explorer</a><a href="https://github.com/isaa-sudweeks/mujoco-truss-gen">GitHub</a></nav></div>
 <div class="summary">{len(successful)} presets ranked by initial worst-case rigidity index; {len(failures)} failures.</div>
 <div class="controls"><input id="search" type="search" placeholder="Search preset name">
 <select id="family"><option value="">All families</option><option>Built-in</option><option>Usevitch</option><option>Henneberg</option><option>Failed</option></select></div>

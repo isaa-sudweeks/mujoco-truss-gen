@@ -157,6 +157,14 @@ variant `_1`.
 The same site includes an interactive [terrain explorer](https://isaa-sudweeks.github.io/mujoco-truss-gen/terrain.html)
 that previews every height-field family and produces a copyable `TerrainConfig`.
 
+A [training distribution](https://isaa-sudweeks.github.io/mujoco-truss-gen/distribution.html)
+page plots how the presets span topology space, to help choose training robots for a
+generalist controller. Rebuild its data after changing presets (takes a few minutes):
+
+```bash
+.venv/bin/python tools/build_training_distribution.py
+```
+
 Routed continuous-tube presets such as `tetrahedron` are all-edge-actuated models
 whose route tendons softly constrain each tube to its initial total length. They
 also support `realistic=True`, which clones
