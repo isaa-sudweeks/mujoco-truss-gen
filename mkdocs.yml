@@ -9,6 +9,7 @@ nav:
   - Reference:
       - Model Generation: model-generation.md
       - Physical Parameters: physical-parameters.md
+      - State, Actions, and Sensors: state-actions-sensors.md
       - Environments: environments.md
       - Terrain: terrain.md
       - STL Import: stl-import.md

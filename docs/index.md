@@ -16,6 +16,7 @@ environment.
 | --- | --- |
 | Inspect a generated robot and watch it settle | [Built-in viewer](first-robot.md#2-build-and-view-the-robot) |
 | Apply your own commands or run on a machine without a display | [Scripted CPU simulation](first-robot.md#3-run-a-scripted-simulation) |
+| Read robot state, send commands, or read accelerometers | [State, actions, and sensors](state-actions-sensors.md) |
 | Change mass, geometry, or actuator settings for a run | [Physical parameters](physical-parameters.md) |
 | Use observations, actions, rewards, or batched simulation | [Environments](environments.md) |
 
