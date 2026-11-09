@@ -45,3 +45,17 @@ mujoco-truss-gen/
 
 The package code lives under `src/mujoco_truss_gen`. Tests live under `tests`.
 User-facing examples live under `examples`.
+
+## Preview the documentation
+
+From the repository root, install MkDocs in your virtual environment and start
+the preview server:
+
+```bash
+python -m pip install mkdocs==1.6.1
+python -m mkdocs serve
+```
+
+Open <http://127.0.0.1:8000/mujoco-truss-gen/docs/>. Run
+`python -m mkdocs build --strict` before submitting docs changes. GitHub Pages
+publishes the generated docs at `/docs/` alongside the existing preset catalog.

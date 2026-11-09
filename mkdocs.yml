@@ -1,0 +1,19 @@
+site_name: MuJoCo Truss Gen
+site_url: https://isaa-sudweeks.github.io/mujoco-truss-gen/docs/
+repo_url: https://github.com/isaa-sudweeks/mujoco-truss-gen
+edit_uri: edit/main/docs/
+theme: readthedocs
+nav:
+  - Start Here: index.md
+  - First Robot: first-robot.md
+  - Reference:
+      - Model Generation: model-generation.md
+      - Environments: environments.md
+      - Terrain: terrain.md
+      - STL Import: stl-import.md
+      - GNN Utilities: gnn-utilities.md
+      - MJX-Warp Benchmarks: benchmarks/mjx_warp.md
+  - Contributing:
+      - Development: development.md
+      - Roadmap: roadmap.md
+      - Releasing: releasing.md

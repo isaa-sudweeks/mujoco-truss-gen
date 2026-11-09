@@ -72,6 +72,9 @@ python -m pip install "mujoco-truss-gen[terrain]"
 
 ## Quick Start
 
+Follow the [first robot tutorial](docs/first-robot.md) to build, simulate, and
+view a truss, or browse the [documentation site](https://isaa-sudweeks.github.io/mujoco-truss-gen/docs/).
+
 Generate the built-in octahedron model:
 
 ```python

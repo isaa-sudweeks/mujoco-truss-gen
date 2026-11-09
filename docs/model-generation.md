@@ -210,6 +210,13 @@ quit
   are needed, because those helpers infer structure from generated body, site,
   tendon, and actuator names.
 
+## Fixed Physical Parameters
+
+Pass `physical_params=TrussPhysicalParameters(...)` to `get_mujoco_spec()`
+to set the physical properties when you generate the model. See
+[the first robot tutorial](first-robot.md#4-change-fixed-physical-parameters)
+for examples with abstract and realistic triangle models.
+
 ## Model Modes
 
 - `realistic=False` creates one world-body per node with slide joints on `x`,
