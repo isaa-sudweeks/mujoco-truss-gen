@@ -1433,6 +1433,31 @@ def test_realistic_accelerometers_can_be_disabled() -> None:
     assert root.find("./sensor/accelerometer") is None
 
 
+@pytest.mark.parametrize(
+    ("config", "position", "orientation"),
+    [
+        ({"pos": (0.01, -0.02, 0.03)}, (0.01, -0.02, 0.03), (1, 0, 0, 0)),
+        ({"quat": (0.5, 0.5, 0.5, 0.5)}, (0, 0, 0), (0.5, 0.5, 0.5, 0.5)),
+    ],
+)
+def test_accelerometer_mount_uses_separate_site_on_node_body(
+    config: dict, position: tuple, orientation: tuple
+) -> None:
+    model = get_mujoco_spec(
+        "octahedron", realistic=True, accelerometer_config=config
+    ).compile()
+    assert model.nsensor > 0
+    for sensor_id in range(model.nsensor):
+        sensor = model.sensor(sensor_id)
+        mount = model.site(int(sensor.objid[0]))
+        node = model.site(sensor.name.removeprefix("accel_"))
+        assert mount.id != node.id
+        assert mount.bodyid == node.bodyid
+        assert mount.pos == pytest.approx(position)
+        assert mount.quat == pytest.approx(orientation)
+        assert node.pos == pytest.approx((0, 0, 0))
+
+
 def test_icosahedron_definition_shape() -> None:
     node_dict, triangle_dict = get_icosahedron_definition()
 

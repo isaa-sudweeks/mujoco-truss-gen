@@ -250,6 +250,19 @@ site by default. Pass `accelerometer_config=AccelerometerConfig(...)` to
 configure sensor fields such as `noise`, `cutoff`, `nsample`, `delay`, or
 `name_prefix`; pass `accelerometer_config=None` to omit them.
 
+To place the accelerometers on the node housings, pass a mounting pose in
+`AccelerometerConfig`, for example
+`AccelerometerConfig(pos=(0.01, 0.0, 0.0), quat=(0.70710678, 0.0, 0.0, 0.70710678))`.
+The same pose is applied to each generated node in its local body frame.
+`pos` is measured in meters from the node center and `quat` uses MuJoCo's
+`(w, x, y, z)` order. The node body frame can differ from the box geometry's
+frame. Omitted position and orientation default to zero offset and identity
+rotation. A custom mount uses a dedicated sensor site and leaves the original
+node site available for control.
+
+See [Sensors](sensors.md#mounting-position-and-orientation) for a complete
+mounting example.
+
 ## References
 
 - Nathan Usevitch, Isaac Weaver, and James Usevitch. "Triangle-Decomposable
