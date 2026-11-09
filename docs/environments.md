@@ -422,8 +422,10 @@ the CUDA parity tests pass, and no contact/constraint capacity gate fails.
 - `render_mode="rgb_array"` returns a rendered NumPy RGB image.
 - `render_mode="human"` opens a passive MuJoCo viewer when the local MuJoCo
   viewer module is available.
-- `view(spec)` compiles a generated spec and opens the standard MuJoCo passive
-  viewer.
+- `view(spec)` runs the package's built-in simulation loop for a generated spec
+  and displays it in MuJoCo's passive viewer. Follow the
+  [first robot tutorial](first-robot.md#2-build-and-view-the-robot) for launch
+  commands on Linux and macOS.
 - `view_node_velocity_terminal(spec)` opens the MuJoCo viewer for a routed
   continuous-tube model and reads node-level scalar velocity commands from the
   terminal. Each node command is mapped through `NodeVelocityController` into
