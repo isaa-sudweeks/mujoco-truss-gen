@@ -8,6 +8,7 @@ nav:
   - First Robot: first-robot.md
   - Reference:
       - Model Generation: model-generation.md
+      - Sensors: sensors.md
       - Physical Parameters: physical-parameters.md
       - State, Actions, and Sensors: state-actions-sensors.md
       - Environments: environments.md
