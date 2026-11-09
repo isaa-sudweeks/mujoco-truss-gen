@@ -8,6 +8,7 @@ nav:
   - First Robot: first-robot.md
   - Reference:
       - Model Generation: model-generation.md
+      - Physical Parameters: physical-parameters.md
       - Environments: environments.md
       - Terrain: terrain.md
       - STL Import: stl-import.md

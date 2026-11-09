@@ -74,10 +74,11 @@ model = spec.compile()
 ```
 
 The route creates one edge tendon for each adjacent node pair in the path.
-Every unique route edge receives an actuator. Routed continuous-tube models do
-not use route-length equality constraints, so they can run without MuJoCo tendon
-constraints. Route tendons are still emitted as non-actuated route metadata and
-visual tendons.
+Every unique route edge receives an actuator. By default a separate,
+non-actuated tendon represents the whole route and has a soft equality
+constraint on its initial length. Set `disable_route_length_constraint=True`
+on a route to omit that equality, as the STL importer does. The whole-route
+tendon is still generated for visualization and metadata.
 
 `get_mujoco_spec()`, `build_triangle()`, and `build_shapes()` treat caller-provided
 dictionaries as read-only inputs. Realistic builders clone shared nodes
@@ -213,9 +214,9 @@ quit
 ## Fixed Physical Parameters
 
 Pass `physical_params=TrussPhysicalParameters(...)` to `get_mujoco_spec()`
-to set the physical properties when you generate the model. See
-[the first robot tutorial](first-robot.md#4-change-fixed-physical-parameters)
-for examples with abstract and realistic triangle models.
+to set the physical properties when you generate the model. The
+[physical parameter reference](physical-parameters.md) lists the defaults
+and which model modes use each field.
 
 ## Model Modes
 
@@ -236,7 +237,7 @@ for examples with abstract and realistic triangle models.
   scale-proportional `realistic_node_clone_offset` behavior. In routed shape
   dictionaries, passive route endpoints
   are rendered as cylinders with their flat-face normal aligned to the connector
-  rod and diameter matched to the edge tendon width. The routed-tube
+  rod and radius set by the edge tendon width. The routed-tube
   `realistic=True` path is still incomplete and should be treated as a known
   modeling limitation until the routed connector/body geometry is fixed.
 

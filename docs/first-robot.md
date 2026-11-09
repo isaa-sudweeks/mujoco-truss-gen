@@ -1,7 +1,7 @@
 # Simulate your first truss robot
 
-Build an octahedron, step it with native MuJoCo, and open a live viewer.
-The example uses a scripted tendon command and runs on the CPU.
+Build an octahedron and watch it simulate with the package's built-in
+`view()` helper. Then run a scripted tendon command headlessly on the CPU.
 
 ## 1. Install the package
 
@@ -15,92 +15,75 @@ source .venv/bin/activate
 python -m pip install -e .
 ```
 
-## 2. Build and step the robot
+## 2. Build and view the robot
 
-Save this script as `first_robot.py` in the repository root.
+Save this as `view_robot.py` in the repository root:
 
 ```python
-import argparse
+from mujoco_truss_gen import get_mujoco_spec, view
+
+spec = get_mujoco_spec("octahedron", realistic=False)
+view(spec)
+```
+
+Run the script from the activated virtual environment:
+
+```bash
+# macOS
+mjpython view_robot.py
+
+# Linux with a graphical desktop
+python view_robot.py
+```
+
+`get_mujoco_spec()` builds an editable description of the robot and its world.
+`view()` compiles the spec, initializes the tendon actuators at their starting
+lengths, advances the physics, and refreshes the display. It uses MuJoCo's
+window and handles the simulation loop for you.
+
+Drag to rotate the camera, scroll to zoom, and close the window to end the
+simulation. The robot starts with zero external tendon commands, so you may
+mainly see it settle under gravity. For interactive node commands on a routed
+model, see [Rendering](environments.md#rendering).
+
+## 3. Run a scripted simulation
+
+Use this version for a machine without a display or when you want to control
+the simulation loop from Python. Save it as `first_robot.py` and run
+`python first_robot.py`.
+
+```python
 import math
-import time
 
 import mujoco
 
 from mujoco_truss_gen import MujocoModel, TrussPhysicalParameters, get_mujoco_spec
 
+params = TrussPhysicalParameters(active_node_mass=0.15, passive_node_mass=0.15)
+spec = get_mujoco_spec("octahedron", realistic=False, physical_params=params)
+robot = MujocoModel(spec)
+model, data = robot.model, robot.data
+actuator_id = robot.external_actuator_ids[0]
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--view", action="store_true", help="Open the MuJoCo viewer")
-    args = parser.parse_args()
+print(f"Commanding {model.actuator(actuator_id).name}")
+print(f"Node mass: {model.body('node_1').mass[0]:.3f} kg")
 
-    params = TrussPhysicalParameters(active_node_mass=0.15, passive_node_mass=0.15)
-    spec = get_mujoco_spec("octahedron", realistic=False, physical_params=params)
-    robot = MujocoModel(spec)
-    model, data = robot.model, robot.data
-    actuator_id = robot.external_actuator_ids[0]
-    print(f"Commanding {model.actuator(actuator_id).name}")
-    print(f"Node mass: {model.body('node_1').mass[0]:.3f} kg")
+for _ in range(500):
+    # Oscillate one tendon velocity command at 1 Hz.
+    data.ctrl[actuator_id] = 0.02 * math.sin(2 * math.pi * data.time)
+    robot.apply_angle_bisector_control()
+    mujoco.mj_step(model, data)
 
-    def step():
-        # Oscillate one tendon velocity command at 1 Hz.
-        data.ctrl[actuator_id] = 0.02 * math.sin(2 * math.pi * data.time)
-        robot.apply_angle_bisector_control()
-        mujoco.mj_step(model, data)
-
-    if args.view:
-        from mujoco import viewer
-
-        with viewer.launch_passive(model, data) as window:
-            window.sync()
-            while window.is_running():
-                start = time.monotonic()
-                step()
-                window.sync()
-                remaining = model.opt.timestep - (time.monotonic() - start)
-                if remaining > 0:
-                    time.sleep(remaining)
-    else:
-        for _ in range(500):
-            step()
-
-    print(f"Simulated {data.time:.3f} seconds")
-    print(f"Node 1 position: {data.body('node_1').xpos}")
-
-
-if __name__ == "__main__":
-    main()
+print(f"Simulated {data.time:.3f} seconds")
+print(f"Node 1 position: {data.site('node_1').xpos}")
 ```
 
-Run the headless simulation with `python first_robot.py`. It prints the
-actuator name, the configured node mass, the elapsed simulation time, and
-the final position of node 1.
-
-`get_mujoco_spec()` describes the robot and its world. `MujocoModel(spec)`
-compiles the spec, creates the mutable `MjData` state, and initializes the
-integrated-velocity actuators at their starting tendon lengths.
-`mujoco.mj_step()` advances the physics by one timestep. The example sends
-a velocity command to one external actuator while leaving the others at zero
-command. The bisector control call updates the internal hinge targets for
-models that have them.
-
-## 3. Watch the same simulation
-
-Run one of these commands from the activated virtual environment:
-
-```bash
-# macOS
-mjpython first_robot.py --view
-
-# Linux with a graphical desktop
-python first_robot.py --view
-```
-
-The passive viewer displays the same state advanced by the script.
-`window.sync()` updates the display after each step, and the sleep paces the
-loop toward real time. Drag to rotate the camera, scroll to zoom, and close
-the window to end the simulation. On a machine without a graphical session,
-use the headless command in step 2. See the [MuJoCo viewer guide](https://mujoco.readthedocs.io/en/stable/python.html#passive-viewer).
+`MujocoModel(spec)` creates the compiled `MjModel` and mutable `MjData`
+state and initializes the tendon actuators. `data.ctrl` contains the actuator
+commands. The loop commands one external tendon and leaves the others at zero.
+`apply_angle_bisector_control()` updates the internal hinge targets for models
+with connector hinges. `mujoco.mj_step()` advances the physics by
+`model.opt.timestep`, so 500 steps at the default 2 ms take one simulated second.
 
 ## 4. Change fixed physical parameters
 
@@ -126,11 +109,14 @@ params = TrussPhysicalParameters(active_node_mass=0.20, hinge_position_kp=30.0)
 spec = get_mujoco_spec("octahedron", realistic=True, physical_params=params)
 ```
 
-For this variant, remove the abstract-model `node_1` mass and position print
-lines. Realistic models attach node sites and geoms to triangle bodies, so
-you can inspect site positions with `data.site(site_name).xpos` using names
-from `model.site(i).name`. The hinge gain applies to the internal connector
-position servos. The scripted command still targets an external tendon.
+Use the same parameter and spec lines in `view_robot.py` to watch the
+configured model. In the scripted run, omit the mass print for the realistic
+variant. Its mass is distributed across triangle bodies, node geoms, and
+connectors. The node site still provides a position, and the scripted command
+still targets an external tendon.
+
+See the [physical parameter reference](physical-parameters.md) for every field,
+its default, and which models use it.
 
 See [model generation](model-generation.md) for custom trusses, [terrain](terrain.md)
 for changing the ground, and [environments](environments.md) for using the

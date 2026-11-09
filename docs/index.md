@@ -10,6 +10,15 @@ environment.
   and abstract and realistic models.
 - [Environments](environments.md) covers the Gymnasium and batched MJX interfaces.
 
+## Choose a simulation workflow
+
+| Goal | Start with |
+| --- | --- |
+| Inspect a generated robot and watch it settle | [Built-in viewer](first-robot.md#2-build-and-view-the-robot) |
+| Apply your own commands or run on a machine without a display | [Scripted CPU simulation](first-robot.md#3-run-a-scripted-simulation) |
+| Change mass, geometry, or actuator settings for a run | [Physical parameters](physical-parameters.md) |
+| Use observations, actions, rewards, or batched simulation | [Environments](environments.md) |
+
 ## Browser tools
 
 - [Preset catalog](https://isaa-sudweeks.github.io/mujoco-truss-gen/)
