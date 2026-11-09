@@ -1,7 +1,7 @@
 # Simulate your first truss robot
 
 Build an octahedron and watch it simulate with the package's built-in
-`view()` helper. Then apply a scripted tendon command with or without a live
+`view()` helper. Then read its state and apply a vector of tendon commands with or without a live
 window.
 
 ## 1. Install the package
@@ -54,10 +54,10 @@ displays the robot live with `--view`.
 
 ```python
 import argparse
-import math
 import time
 
 import mujoco
+import numpy as np
 
 from mujoco_truss_gen import MujocoModel, TrussPhysicalParameters, get_mujoco_spec
 
@@ -69,14 +69,33 @@ params = TrussPhysicalParameters(active_node_mass=0.15, passive_node_mass=0.15)
 spec = get_mujoco_spec("octahedron", realistic=False, physical_params=params)
 robot = MujocoModel(spec)
 model, data = robot.model, robot.data
-actuator_id = robot.external_actuator_ids[0]
+# Each entry in the action vector corresponds to the name at the same index.
+actuator_names = robot.external_actuator_names
+limits = robot.get_external_ctrlrange()
+phases = np.linspace(0, 2 * np.pi, len(actuator_names), endpoint=False)
 
-print(f"Commanding {model.actuator(actuator_id).name}")
+print(f"Action order: {actuator_names}")
 print(f"Node mass: {model.body('node_1').mass[0]:.3f} kg")
 
+
+def read_state():
+    # Copy the arrays so this snapshot stays valid after the simulation steps.
+    return {
+        "time": data.time,
+        "qpos": data.qpos.copy(),
+        "qvel": data.qvel.copy(),
+        "act": data.act.copy(),
+    }
+
+
 def step():
-    # Extend and retract one tendon target over a four-second cycle.
-    data.ctrl[actuator_id] = 0.08 * math.sin(2 * math.pi * data.time / 4)
+    state = read_state()
+    # This open-loop example uses time. A feedback controller can use qpos,
+    # qvel, and act from the same snapshot to compute its command vector.
+    action = 0.08 * np.sin(2 * np.pi * state["time"] / 4 + phases)
+    # Clip in m/s and write all external commands before stepping the physics.
+    robot.set_external_ctrl(np.clip(action, limits[:, 0], limits[:, 1]))
+    # Update the separate internal hinge targets if the model has connectors.
     robot.apply_angle_bisector_control()
     mujoco.mj_step(model, data)
 
@@ -84,6 +103,7 @@ def step():
 if args.view:
     from mujoco import viewer
 
+    # The viewer shares the simulation state and displays each new step.
     with viewer.launch_passive(model, data) as window:
         window.sync()
         while window.is_running():
@@ -95,16 +115,21 @@ else:
     for _ in range(500):
         step()
 
-print(f"Simulated {data.time:.3f} seconds")
+# Refresh derived Cartesian positions at the final integrated state.
+mujoco.mj_forward(model, data)
+state = read_state()
+print(f"Simulated {state['time']:.3f} seconds")
+print(f"State shapes: qpos={state['qpos'].shape}, qvel={state['qvel'].shape}, act={state['act'].shape}")
 print(f"Node 1 position: {data.site('node_1').xpos}")
 ```
 
 `MujocoModel(spec)` creates the compiled `MjModel` and mutable `MjData`
-state and initializes the tendon actuators. `data.ctrl` contains the actuator
-commands. The loop commands one external tendon and leaves the others at zero.
-`apply_angle_bisector_control()` updates the internal hinge targets for models
-with connector hinges. `mujoco.mj_step()` advances the physics by
-`model.opt.timestep`.
+state and initializes the tendon actuators. Each iteration reads one snapshot,
+computes one command per external tendon, writes the entire vector, and
+advances the physics by `model.opt.timestep`. The phase offsets let tendons
+extend and retract at different points in the same four-second cycle.
+See [State, actions, and sensors](state-actions-sensors.md) for array shapes,
+actuator ordering, and accelerometer examples.
 
 ### Watch the robot respond to control
 
@@ -118,8 +143,8 @@ mjpython first_robot.py --view
 python first_robot.py --view
 ```
 
-Watch the commanded edge extend and retract. The terminal prints its actuator
-name. Close the window to end the run.
+Watch the truss change shape as the tendon commands cycle. The terminal prints
+the actuator order. Close the window to end the run.
 
 The built-in `view(spec)` helper in step 2 owns its simulation loop. Here the
 passive viewer shares the same `model` and `data` as your scripted loop, so it
@@ -156,8 +181,8 @@ spec = get_mujoco_spec("octahedron", realistic=True, physical_params=params)
 Use the same parameter and spec lines in `view_robot.py` to watch the
 configured model. In the scripted run, omit the mass print for the realistic
 variant. Its mass is distributed across triangle bodies, node geoms, and
-connectors. The node site still provides a position, and the scripted command
-still targets an external tendon.
+connectors. The node site still provides a position, and the same loop uses
+the realistic model's external actuator order.
 
 See the [physical parameter reference](physical-parameters.md) for every field,
 its default, and which models use it.

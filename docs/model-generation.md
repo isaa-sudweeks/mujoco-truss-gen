@@ -248,7 +248,9 @@ MJX's supported collision pairs.
 Realistic triangle models include one accelerometer sensor per generated node
 site by default. Pass `accelerometer_config=AccelerometerConfig(...)` to
 configure sensor fields such as `noise`, `cutoff`, `nsample`, `delay`, or
-`name_prefix`; pass `accelerometer_config=None` to omit them.
+`name_prefix`. Pass `accelerometer_config=None` to omit them. See
+[Read accelerometers](state-actions-sensors.md#read-accelerometers) for a
+working example.
 
 ## References
 
