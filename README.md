@@ -157,6 +157,11 @@ Use `--realistic` for realistic connector geometry, `--overwrite` to rebuild exi
 entries, or `--include-aliases` to include the unsuffixed Henneberg names that alias
 variant `_1`.
 
+Click a preset thumbnail on the published catalog to open its simulation in
+MuJoCo Live in a new tab. The GitHub Pages workflow exports the MJCF for every
+rendered preset using the scale and geometry settings saved in the catalog
+manifest. The browser runs the physics and provides MuJoCo's viewer controls.
+
 The same site includes an interactive [terrain explorer](https://isaa-sudweeks.github.io/mujoco-truss-gen/terrain.html)
 that previews every height-field family and produces a copyable `TerrainConfig`.
 

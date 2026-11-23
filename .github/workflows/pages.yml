@@ -8,6 +8,10 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "preset_catalog/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/**"
+      - "tools/export_catalog_models.py"
   pull_request:
     branches: [main]
     paths:
@@ -15,6 +19,10 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "preset_catalog/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/**"
+      - "tools/export_catalog_models.py"
   workflow_dispatch:
 
 permissions:
@@ -35,8 +43,9 @@ jobs:
 
       - name: Assemble the Pages site
         run: |
-          python -m pip install mkdocs==1.6.1
+          python -m pip install uv mkdocs==1.6.1
           cp -a preset_catalog site
+          uv run --frozen --no-dev python tools/export_catalog_models.py site
           python -m mkdocs build --strict --site-dir site/docs
 
       - name: Upload Pages artifact

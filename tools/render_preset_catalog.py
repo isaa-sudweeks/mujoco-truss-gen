@@ -186,6 +186,7 @@ p {{ margin:.35rem 0; color:#c1c9d6; font-size:.88rem }} .rank {{ color:#72d6a1;
 </style></head><body><header><div class="topline"><h1>MuJoCo truss preset catalog</h1>
 <nav class="site-nav" aria-label="Primary navigation"><a href="docs/">Docs</a><a href="distribution.html">Training distribution</a><a href="terrain.html">Terrain explorer</a><a href="https://github.com/isaa-sudweeks/mujoco-truss-gen">GitHub</a></nav></div>
 <div class="summary">{len(successful)} presets ranked by initial worst-case rigidity index; {len(failures)} failures.</div>
+<p>Click a thumbnail to simulate the model in MuJoCo Live (opens in a new tab).</p>
 <div class="controls"><input id="search" type="search" placeholder="Search preset name">
 <select id="family"><option value="">All families</option><option>Built-in</option><option>Usevitch</option><option>Henneberg</option><option>Failed</option></select></div>
 </header><main class="grid">{"".join(cards)}</main>
@@ -193,7 +194,7 @@ p {{ margin:.35rem 0; color:#c1c9d6; font-size:.88rem }} .rank {{ color:#72d6a1;
 const search=document.querySelector('#search'), family=document.querySelector('#family');
 function filter(){{const q=search.value.toLowerCase(),f=family.value.toLowerCase();document.querySelectorAll('.card').forEach(c=>c.hidden=!(c.dataset.name.includes(q)&&(!f||c.dataset.family===f)));}}
 search.addEventListener('input',filter);family.addEventListener('change',filter);
-</script></body></html>"""
+</script><script type="module" src="live-preview.mjs"></script></body></html>"""
     (output_dir / "index.html").write_text(document, encoding="utf-8")
 
 
